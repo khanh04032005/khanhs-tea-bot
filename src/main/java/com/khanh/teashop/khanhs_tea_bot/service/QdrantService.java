@@ -39,11 +39,17 @@ public class QdrantService {
         vectors.put("size", qdrantProperties.getVectorSize());
         vectors.put("distance", "Cosine");
 
+        Map<String, Object> indexedFields = new HashMap<>();
+        indexedFields.put("source", Map.of("type", "keyword"));
+        indexedFields.put("category", Map.of("type", "keyword"));
+
         Map<String, Object> body = new HashMap<>();
         body.put("vectors", vectors);
+        body.put("payload_schema", indexedFields);
 
         try {
             restTemplate.exchange(url, HttpMethod.PUT, new HttpEntity<>(body, headers()), String.class);
+            log.info("Qdrant collection created: {}", qdrantProperties.getCollection());
         } catch (HttpClientErrorException.Conflict conflict) {
             log.info("Qdrant collection already exists: {}", qdrantProperties.getCollection());
         } catch (Exception exception) {
@@ -82,6 +88,7 @@ public class QdrantService {
 
         try {
             restTemplate.exchange(url, HttpMethod.PUT, new HttpEntity<>(body, headers()), String.class);
+            log.info("Qdrant upserted {} documents", points.size());
         } catch (Exception exception) {
             log.error("Qdrant upsert failed", exception);
             throw new IllegalStateException("Qdrant upsert failed");
@@ -97,26 +104,26 @@ public class QdrantService {
     }
 
     private List<String> searchTextContextsInternal(String question, int limit, String source) {
-        List<Double> vector = geminiEmbeddingService.embed(question);
-
-        String url = qdrantProperties.getUrl()
-                + "/collections/" + qdrantProperties.getCollection()
-                + "/points/search";
-
-        Map<String, Object> body = new HashMap<>();
-        body.put("vector", vector);
-        body.put("limit", limit);
-        body.put("with_payload", true);
-
-        if (source != null && !source.isBlank()) {
-            body.put("filter", Map.of(
-                    "must", List.of(
-                            Map.of("key", "source", "match", Map.of("value", source))
-                    )
-            ));
-        }
-
         try {
+            List<Double> vector = geminiEmbeddingService.embed(question);
+
+            String url = qdrantProperties.getUrl()
+                    + "/collections/" + qdrantProperties.getCollection()
+                    + "/points/search";
+
+            Map<String, Object> body = new HashMap<>();
+            body.put("vector", vector);
+            body.put("limit", limit);
+            body.put("with_payload", true);
+
+            if (source != null && !source.isBlank()) {
+                body.put("filter", Map.of(
+                        "must", List.of(
+                                Map.of("key", "source", "match", Map.of("value", source))
+                        )
+                ));
+            }
+
             ResponseEntity<String> response = restTemplate.exchange(
                     url,
                     HttpMethod.POST,
@@ -136,8 +143,8 @@ public class QdrantService {
             }
             return contexts;
         } catch (Exception exception) {
-            log.error("Qdrant search failed", exception);
-            return List.of();
+            log.warn("Qdrant search failed, returning empty", exception);
+            return new ArrayList<>();
         }
     }
 

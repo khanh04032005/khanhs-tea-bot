@@ -90,12 +90,13 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
             /add <productId> <M|L> <quantity>
             /remove <productId> <M|L>
             /cart
-            /checkout <ten_khach> <so_dien_thoai>
+            /checkout <ten_khach> <so_dien_thoai> [địa chỉ]
             /cancel <orderId>
             /clear
 
             Sau /checkout bot sẽ gửi link thanh toán (và mã QR nếu có).
             Chuyển khoản thành công, bot sẽ tự báo trạng thái đơn.
+            Nếu khách hàng không ghi địa chỉ mặc định sẽ nhận hàng tại quán.
             """);
                 return;
             }
@@ -329,14 +330,15 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         }
 
         try {
-            String[] parts = text.split("\\s+");
+            String[] parts = text.split("\\s+", 4);
             if (parts.length < 3) {
-                send(chatId, "Sai cú pháp. Dùng: /checkout <ten_khach> <so_dien_thoai>");
+                send(chatId, "Sai cú pháp. Dùng: /checkout <ten_khach> <so_dien_thoai> [dia_chi]");
                 return;
             }
 
             String customerName = parts[1].trim();
             String customerPhone = parts[2].trim();
+            String address = (parts.length > 3) ? parts[3].trim() : null;
 
             if (!customerPhone.matches("^[0-9+]{9,15}$")) {
                 send(chatId, "Số điện thoại không hợp lệ.");
@@ -354,6 +356,7 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
             CreateOrderRequest request = CreateOrderRequest.builder()
                     .customerName(customerName)
                     .customerPhone(customerPhone)
+                    .address(address != null ? address : "Nhận tại quán")
                     .telegramChatId(chatId)
                     .items(items)
                     .build();
@@ -364,11 +367,16 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
             carts.remove(chatId);
             cartTouchedAt.remove(chatId);
 
+            String deliveryInfo = address != null
+                    ? "📍 Ship tới: " + address
+                    : "📍 Nhận tại quán";
+
             send(chatId, """
                 Tạo đơn thành công ✅
                 Mã đơn: %d
                 Tổng tiền: %,d VND
                 Trạng thái: %s
+                %s
 
                 Quét QR bên dưới hoặc bấm link thanh toán:
                 %s
@@ -376,6 +384,7 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
                     response.getId(),
                     response.getTotalAmount(),
                     response.getStatus(),
+                    deliveryInfo,
                     payment.getCheckoutUrl()
             ));
 
