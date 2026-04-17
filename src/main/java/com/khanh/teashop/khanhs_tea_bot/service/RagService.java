@@ -55,21 +55,22 @@ public class RagService {
 
             // Cải tiến Prompt: Ép AI trả lời có tâm hơn
             String prompt = """
-                BẠN LÀ NHÂN VIÊN TƯ VẤN CỦA KHANHS TEA SHOP.
-                NHIỆM VỤ: Trả lời khách dựa trên CONTEXT được cung cấp.
-                
-                QUY TẮC:
-                1. Trả lời ngắn gọn, thân thiện, xưng hô "mình" - "bạn".
-                2. Chỉ trả lời dựa trên CONTEXT. Nếu khách hỏi ngoài lề (ví dụ: chính trị, ăn cơm), hãy từ chối khéo.
-                3. Nếu khách hỏi giờ mở cửa hoặc phí ship, hãy tìm kỹ trong CONTEXT.
-                
-                CONTEXT:
-                %s
-                
-                CÂU HỎI:
-                %s
-                
-                TRẢ LỜI:
+                    BẠN LÀ NHÂN VIÊN TƯ VẤN CỦA QUÁN KHANHS TEA SHOP.
+                                          NHIỆM VỤ: Trả lời câu hỏi của khách dựa trên CONTEXT được cung cấp.
+                    
+                                            QUY TẮC:
+                                            1. Trả lời bằng tiếng Việt, ngắn gọn, tự nhiên, xưng hô "mình" - "bạn".
+                                            2. Nếu khách hỏi về thực đơn (menu), giờ mở cửa, phí ship, địa chỉ: Hãy lấy thông tin chính xác từ CONTEXT.
+                                            3. Nếu CONTEXT không có thông tin khách cần: Hãy nói "Dạ hiện tại mình chưa có thông tin chính xác về món/vấn đề này, bạn xem tạm /menu hoặc nhắn 'tư vấn' để mình hỗ trợ thêm nhé".
+                                            4. TUYỆT ĐỐI không được nói câu "Chỉ hỗ trợ đặt trà sữa" nếu khách đang hỏi về chính thông tin trà sữa của quán.
+                    
+                                            CONTEXT:
+                                            %s
+                    
+                                            CÂU HỎI CỦA KHÁCH:
+                                            %s
+                    
+                                            TRẢ LỜI:
                 """.formatted(joinedContext, question);
 
             return callGemini(prompt);
