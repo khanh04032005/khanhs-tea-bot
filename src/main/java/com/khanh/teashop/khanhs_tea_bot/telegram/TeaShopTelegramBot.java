@@ -8,8 +8,13 @@ import com.khanh.teashop.khanhs_tea_bot.dto.payment.PaymentResponse;
 import com.khanh.teashop.khanhs_tea_bot.entity.Product;
 import com.khanh.teashop.khanhs_tea_bot.service.*;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -42,216 +47,332 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
     private final Map<Long, Boolean> checkoutLocks = new ConcurrentHashMap<>();
 
     @Override
-    public String getBotUsername() { return telegramBotProperties.getUsername(); }
+    public String getBotUsername() {
+        return telegramBotProperties.getUsername();
+    }
 
     @Override
-    public String getBotToken() { return telegramBotProperties.getToken(); }
+    public String getBotToken() {
+        return telegramBotProperties.getToken();
+    }
 
     @Override
     public void onUpdateReceived(Update update) {
-        if (update == null || !update.hasMessage() || !update.getMessage().hasText()) return;
+        if (update == null || !update.hasMessage() || !update.getMessage().hasText()) {
+            return;
+        }
 
         String text = update.getMessage().getText().trim();
-        String lowerText = text.toLowerCase();
         Long chatId = update.getMessage().getChatId();
 
-        if (!allowRequest(chatId)) return;
+        if (text.length() > MAX_MESSAGE_LENGTH) {
+            send(chatId, "Tin nhắn quá dài, vui lòng nhập ngắn gọn hơn.");
+            return;
+        }
+
+        if (!allowRequest(chatId)) {
+            send(chatId, "Bạn thao tác hơi nhanh, chờ 1 chút rồi thử lại nhé.");
+            return;
+        }
+
         clearExpiredCartIfNeeded(chatId);
 
         try {
-            // --- 1. XỬ LÝ CỨNG CHO "THÊM/ĐẶT" (KHÔNG CẦN AI) ---
-            // Nếu câu có chữ "thêm" hoặc "đặt" + Mã món (VD: TS01)
-            if (lowerText.contains("thêm") || lowerText.contains("đặt") || lowerText.contains("lấy")) {
-                // Regex tìm mã món (2-3 chữ cái + 2 số)
-                java.util.regex.Matcher m = java.util.regex.Pattern.compile("([A-Z]{2,3}\\d{2})").matcher(text.toUpperCase());
-                if (m.find()) {
-                    String productId = m.group(1);
-                    String size = lowerText.contains(" l") ? "L" : "M";
-                    // Tìm số lượng
-                    java.util.regex.Matcher qtyM = java.util.regex.Pattern.compile("(\\d+)").matcher(text);
-                    int qty = 1;
-                    while (qtyM.find()) {
-                        int val = Integer.parseInt(qtyM.group(1));
-                        if (val < 10) qty = val; // Tránh nhầm với mã món
-                    }
-                    handleAdd(chatId, "/add " + productId + " " + size + " " + qty);
-                    return; // Xong việc, không gọi AI nữa
-                }
-            }
+            // 1. Cập nhật lệnh /start để hướng dẫn địa chỉ là tùy chọn
+            if ("/start".equalsIgnoreCase(text)) {
+                send(chatId, """
+            Xin chào, mình là TeaShop Assistant Bot 👋
+            Lệnh:
+            /menu - Xem thực đơn
+            /add <mã> <size M|L> <số lượng>
+            /remove <mã> <size M|L>
+            /cart - Xem giỏ hàng
+            /checkout <tên> <sđt> [địa chỉ]
+            /cancel <mã_đơn>
+            /clear - Xóa giỏ hàng
 
-            // --- 2. XỬ LÝ CỨNG CHO "MỞ CỬA" (KHÔNG CẦN AI) ---
-            if (lowerText.contains("mấy giờ") || lowerText.contains("mở cửa") || lowerText.contains("địa chỉ")) {
-                // Trả về thông tin cứng luôn cho nhanh
-                send(chatId, "🏠 Khanh's Tea Shop mở cửa từ 8:00 - 22:00 hàng ngày nè!\n📍 Địa chỉ: Quận 12, TP.HCM.");
+            💡 Lưu ý:
+            - Phần [địa chỉ] là tùy chọn. Nếu cần giao hàng, hãy nhập địa chỉ sau SĐT.
+            - Nếu không có địa chỉ, quán sẽ chuẩn bị để bạn nhận tại cửa hàng.
+            - Sau /checkout bot sẽ gửi link thanh toán (và mã QR).
+            """);
                 return;
             }
 
-            // --- 3. XỬ LÝ CỨNG CHO "MENU" ---
-            if (lowerText.contains("menu") || lowerText.contains("thực đơn")) {
+            if ("/menu".equalsIgnoreCase(text)) {
                 send(chatId, buildMenuText());
                 return;
             }
 
-            // --- 4. NẾU KHÔNG RƠI VÀO CÁC CÂU TRÊN MỚI GỌI AI ---
-            IntentResult intent = geminiIntentService.parseIntent(text, productService.getAllProducts());
-
-            // Nếu AI báo "Máy chủ bận" (Response trả về câu đó), mình chặn lại luôn
-            if (intent.getResponse() != null && intent.getResponse().contains("Máy chủ đang bận")) {
-                send(chatId, "Dạ shop nghe nè, bạn muốn đặt trà sữa hay xem menu ạ?");
+            if (text.toLowerCase().startsWith("/add ")) {
+                handleAdd(chatId, text);
                 return;
             }
 
-            switch (intent.getIntent().toUpperCase()) {
-                case "ADD_ITEM":
-                    if (intent.getProductId() != null) {
-                        String sz = (intent.getSize() != null) ? intent.getSize().toUpperCase() : "M";
-                        int q = (intent.getQuantity() != null) ? intent.getQuantity() : 1;
-                        handleAdd(chatId, "/add " + intent.getProductId() + " " + sz + " " + q);
-                    }
-                    break;
-                case "CHECKOUT":
-                    if (intent.getCustomerName() != null && intent.getCustomerPhone() != null) {
-                        String adr = (intent.getAddress() != null) ? intent.getAddress() : "Tại cửa hàng";
-                        handleCheckout(chatId, "/checkout " + intent.getCustomerName() + " " + intent.getCustomerPhone() + " " + adr);
-                    } else {
-                        send(chatId, "Cho mình xin Tên + SĐT để tính tiền nhé!");
-                    }
-                    break;
-                case "SHOW_MENU":
-                    send(chatId, buildMenuText());
-                    break;
-                default:
-                    String ragAnswer = ragService.answerMenuQuestion(text);
-                    send(chatId, (ragAnswer != null && !ragAnswer.contains("Máy chủ")) ? ragAnswer : "Bạn nhắn 'menu' để xem món nhé!");
-                    break;
+            if (text.toLowerCase().startsWith("/remove ")) {
+                handleRemove(chatId, text);
+                return;
             }
 
-        } catch (Exception e) {
-            log.error("Lỗi: ", e);
-            send(chatId, "Bạn nhắn 'menu' để xem món nhé!");
+            if ("/cart".equalsIgnoreCase(text)) {
+                send(chatId, buildCartText(chatId));
+                return;
+            }
+
+            if (text.toLowerCase().startsWith("/checkout ")) {
+                handleCheckout(chatId, text);
+                return;
+            }
+
+            if (text.toLowerCase().startsWith("/cancel ")) {
+                handleCancel(chatId, text);
+                return;
+            }
+
+            if ("/clear".equalsIgnoreCase(text)) {
+                carts.remove(chatId);
+                cartTouchedAt.remove(chatId);
+                send(chatId, "Đã xóa giỏ hàng.");
+                return;
+            }
+
+            // Xử lý ngôn ngữ tự nhiên
+            String lower = text.toLowerCase();
+            if (lower.contains("mở cửa") || lower.contains("giờ mở cửa")) {
+                send(chatId, "Quán mở cửa từ 8:00 đến 22:00 mỗi ngày.");
+                return;
+            }
+
+            if (tryHandleNaturalAdd(chatId, text)) {
+                return;
+            }
+
+            IntentResult intent = geminiIntentService.parseIntent(text, productService.getAllProducts());
+
+            if ("SHOW_MENU".equalsIgnoreCase(intent.getIntent())) {
+                send(chatId, buildMenuText());
+                return;
+            }
+
+            if ("SHOW_CART".equalsIgnoreCase(intent.getIntent())) {
+                send(chatId, buildCartText(chatId));
+                return;
+            }
+
+            if ("ADD_ITEM".equalsIgnoreCase(intent.getIntent())
+                    && intent.getProductId() != null
+                    && intent.getSize() != null
+                    && intent.getQuantity() != null) {
+                handleAdd(chatId, "/add " + intent.getProductId() + " " + intent.getSize() + " " + intent.getQuantity());
+                return;
+            }
+
+            // 2. Cập nhật xử lý CHECKOUT qua AI (Gemini)
+            if ("CHECKOUT".equalsIgnoreCase(intent.getIntent())
+                    && intent.getCustomerName() != null
+                    && intent.getCustomerPhone() != null) {
+                String addr = (intent.getAddress() != null) ? " " + intent.getAddress() : "";
+                handleCheckout(chatId, "/checkout " + intent.getCustomerName() + " " + intent.getCustomerPhone() + addr);
+                return;
+            }
+
+            String ragAnswer = ragService.answerMenuQuestion(text);
+            if (ragAnswer != null && !ragAnswer.isBlank()) {
+                send(chatId, ragAnswer);
+                return;
+            }
+
+            send(chatId, "Mình chưa hiểu. Dùng /start để xem lệnh.");
+        } catch (ResponseStatusException exception) {
+            send(chatId, "Lỗi: " + exception.getReason());
+        } catch (Exception exception) {
+            log.error("Bot error, text={}", text, exception);
+            send(chatId, "Có lỗi xảy ra, bạn thử lại giúp mình.");
         }
     }
-    private boolean isRelatedToShop(String text) {
-        String t = text.toLowerCase();
-        return t.contains("uống") || t.contains("món") || t.contains("trà") || t.contains("giá") || t.contains("ship");
-    }
 
-    private void handleSystemCommands(Long chatId, String text) {
-        String lower = text.toLowerCase();
-        if ("/start".equalsIgnoreCase(lower)) {
-            send(chatId, "Hệ thống đặt hàng tự động 🤖\n- /menu: Xem thực đơn\n- /cart: Xem giỏ\n- /checkout <tên> <sđt> <địa chỉ>\n- /clear: Xóa giỏ");
-        } else if (lower.startsWith("/add ")) handleAdd(chatId, text);
-        else if (lower.startsWith("/checkout ")) handleCheckout(chatId, text);
-        else if ("/menu".equalsIgnoreCase(lower)) send(chatId, buildMenuText());
-        else if ("/cart".equalsIgnoreCase(lower)) send(chatId, buildCartText(chatId));
-        else if ("/clear".equalsIgnoreCase(lower)) carts.remove(chatId);
+    // --- CÁC PHƯƠNG THỨC XỬ LÝ CHÍNH ---
+
+    private void handleCheckout(Long chatId, String text) {
+        List<CartItem> cart = carts.getOrDefault(chatId, List.of());
+        if (cart.isEmpty()) {
+            send(chatId, "Giỏ hàng đang trống. Dùng /add để thêm món.");
+            return;
+        }
+
+        if (!acquireCheckoutLock(chatId)) {
+            send(chatId, "Đơn đang được xử lý, vui lòng chờ...");
+            return;
+        }
+
+        try {
+            // Tách tối đa 4 phần để phần 4 là toàn bộ địa chỉ (nếu có)
+            String[] parts = text.split("\\s+", 4);
+            if (parts.length < 3) {
+                send(chatId, "Sai cú pháp. Dùng: /checkout <tên> <sđt> [địa chỉ]");
+                return;
+            }
+
+            String customerName = parts[1].trim();
+            String customerPhone = parts[2].trim();
+
+            // 3. Logic địa chỉ linh hoạt: Nếu không có phần 4 thì ghi mặc định
+            String address = (parts.length == 4) ? parts[3].trim() : "Nhận tại cửa hàng";
+
+            if (!customerPhone.matches("^[0-9+]{9,15}$")) {
+                send(chatId, "Số điện thoại không hợp lệ.");
+                return;
+            }
+
+            List<CreateOrderItemRequest> items = cart.stream()
+                    .map(item -> CreateOrderItemRequest.builder()
+                            .productId(item.productId())
+                            .size(item.size())
+                            .quantity(item.quantity())
+                            .build())
+                    .toList();
+
+            CreateOrderRequest request = CreateOrderRequest.builder()
+                    .customerName(customerName)
+                    .customerPhone(customerPhone)
+                    .address(address) // Gán địa chỉ vào request
+                    .telegramChatId(chatId)
+                    .items(items)
+                    .build();
+
+            OrderResponse response = orderService.createOrder(request);
+            PaymentResponse payment = payOsService.createPaymentForOrder(response.getId());
+
+            carts.remove(chatId);
+            cartTouchedAt.remove(chatId);
+
+            send(chatId, """
+                Tạo đơn thành công ✅
+                Mã đơn: %d
+                Khách hàng: %s
+                Địa chỉ: %s
+                Tổng tiền: %,d VND
+                
+                Vui lòng thanh toán qua link:
+                %s
+                """.formatted(
+                    response.getId(),
+                    customerName,
+                    address,
+                    response.getTotalAmount(),
+                    payment.getCheckoutUrl()
+            ));
+
+            if (payment.getQrCode() != null && !payment.getQrCode().isBlank()) {
+                sendQrImage(chatId, payment.getQrCode());
+            }
+        } finally {
+            releaseCheckoutLock(chatId);
+        }
     }
 
     private void handleAdd(Long chatId, String text) {
         String[] parts = text.split("\\s+");
-        if (parts.length != 4) { send(chatId, "Sai cú pháp. VD: /add TS01 M 2"); return; }
-
-        String pid = parts[1].toUpperCase();
-        String sz = parts[2].toUpperCase();
-        int qty = Integer.parseInt(parts[3]);
-
-        Product p = productService.getProductById(pid);
-        if (p == null || !p.isAvailable()) { send(chatId, "Món này không có sẵn."); return; }
-
-        List<CartItem> cart = carts.computeIfAbsent(chatId, k -> new ArrayList<>());
-
-        // CỘNG DỒN NẾU TRÙNG MÓN + SIZE
-        Optional<CartItem> existing = cart.stream().filter(i -> i.productId().equals(pid) && i.size().equals(sz)).findFirst();
-        if (existing.isPresent()) {
-            int idx = cart.indexOf(existing.get());
-            CartItem old = existing.get();
-            cart.set(idx, new CartItem(pid, p.getName(), sz, old.quantity() + qty, old.unitPrice()));
-        } else {
-            cart.add(new CartItem(pid, p.getName(), sz, qty, "M".equals(sz) ? p.getPriceM() : p.getPriceL()));
+        if (parts.length != 4) {
+            send(chatId, "Sai cú pháp. Dùng: /add <productId> <M|L> <quantity>");
+            return;
         }
 
-        touchCart(chatId);
-        send(chatId, "Đã thêm " + qty + " " + p.getName() + " (Size " + sz + ") vào giỏ.");
-    }
-
-    private void handleCheckout(Long chatId, String text) {
-        List<CartItem> cart = carts.getOrDefault(chatId, List.of());
-        if (cart.isEmpty()) { send(chatId, "Giỏ hàng trống."); return; }
-        if (!acquireCheckoutLock(chatId)) return;
+        String productId = parts[1].trim().toUpperCase();
+        String size = parts[2].trim().toUpperCase();
+        int quantity;
 
         try {
-            String[] parts = text.split("\\s+", 4);
-            if (parts.length < 3) { send(chatId, "Thiếu Tên hoặc SĐT."); return; }
-
-            String name = parts[1].trim();
-            String phone = parts[2].trim();
-            String address = (parts.length == 4) ? parts[3].trim() : "Nhận tại cửa hàng";
-
-            OrderResponse res = orderService.createOrder(CreateOrderRequest.builder()
-                    .customerName(name).customerPhone(phone).address(address).telegramChatId(chatId)
-                    .items(cart.stream().map(i -> CreateOrderItemRequest.builder()
-                            .productId(i.productId()).size(i.size()).quantity(i.quantity()).build()).toList())
-                    .build());
-
-            PaymentResponse pay = payOsService.createPaymentForOrder(res.getId());
-            carts.remove(chatId);
-            send(chatId, "Đơn #" + res.getId() + " thành công! ✅\nTổng: " + res.getTotalAmount() + " VND\nLink: " + pay.getCheckoutUrl());
-            if (pay.getQrCode() != null) sendQrImage(chatId, pay.getQrCode());
-        } finally { releaseCheckoutLock(chatId); }
-    }
-
-    // Các hàm helper (send, sendQrImage, buildMenuText...) giữ nguyên như của bạn nhưng viết gọn lại
-    private String buildMenuText() {
-        List<Product> products = productService.getAllProducts().stream()
-                .filter(Product::isAvailable)
-                // Sắp xếp theo Category trước, sau đó mới đến ID món
-                .sorted(Comparator.comparing(Product::getCategory).thenComparing(Product::getId))
-                .toList();
-
-        StringBuilder builder = new StringBuilder("🧋 MENU\n");
-        String currentCategory = "";
-
-        for (Product product : products) {
-            // Nếu chuyển sang danh mục mới thì in tên danh mục đó ra
-            if (!product.getCategory().equals(currentCategory)) {
-                currentCategory = product.getCategory();
-                builder.append("\n").append(currentCategory).append("\n");
-            }
-            // In chi tiết món theo định dạng đẹp
-            builder.append("• ").append(product.getId()).append(" - ")
-                    .append(product.getName())
-                    .append(" (M: ").append(product.getPriceM())
-                    .append(", L: ").append(product.getPriceL()).append(")\n");
+            quantity = Integer.parseInt(parts[3].trim());
+        } catch (NumberFormatException exception) {
+            send(chatId, "Số lượng phải là số.");
+            return;
         }
 
-        builder.append("\nDùng: /add TS01 M 2");
-        return builder.toString();
+        if (quantity <= 0 || quantity > MAX_QTY_PER_ITEM) {
+            send(chatId, "Số lượng không hợp lệ (1-" + MAX_QTY_PER_ITEM + ").");
+            return;
+        }
+
+        Product product = productService.getProductById(productId);
+        if (!product.isAvailable()) {
+            send(chatId, "Món này hiện đang hết hàng.");
+            return;
+        }
+
+        List<CartItem> cart = carts.computeIfAbsent(chatId, key -> new ArrayList<>());
+        cart.removeIf(item -> item.productId().equals(productId) && item.size().equals(size));
+
+        int unitPrice = "M".equals(size) ? product.getPriceM() : product.getPriceL();
+        cart.add(new CartItem(product.getId(), product.getName(), size, quantity, unitPrice));
+
+        touchCart(chatId);
+        send(chatId, "Đã thêm: " + product.getName() + " (" + size + ") x" + quantity);
+    }
+
+    // --- HELPERS (Giữ nguyên các hàm bổ trợ khác của bạn) ---
+
+    private void handleRemove(Long chatId, String text) {
+        String[] parts = text.split("\\s+");
+        if (parts.length != 3) return;
+        String productId = parts[1].trim().toUpperCase();
+        String size = parts[2].trim().toUpperCase();
+        List<CartItem> cart = carts.get(chatId);
+        if (cart != null) {
+            cart.removeIf(item -> item.productId().equals(productId) && item.size().equals(size));
+            send(chatId, "Đã xóa khỏi giỏ hàng.");
+        }
+    }
+
+    private void handleCancel(Long chatId, String text) {
+        try {
+            Long orderId = Long.parseLong(text.split("\\s+")[1]);
+            orderService.cancelOrder(orderId);
+            send(chatId, "Đã hủy đơn hàng #" + orderId);
+        } catch (Exception e) {
+            send(chatId, "Không thể hủy đơn. Vui lòng kiểm tra lại mã đơn.");
+        }
+    }
+
+    private String buildMenuText() {
+        List<Product> products = productService.getAllProducts();
+        StringBuilder sb = new StringBuilder("🧋 MENU QUÁN\n");
+        products.stream().filter(Product::isAvailable).forEach(p -> {
+            sb.append(String.format("- %s: %s (M:%d, L:%d)\n", p.getId(), p.getName(), p.getPriceM(), p.getPriceL()));
+        });
+        return sb.toString();
     }
 
     private String buildCartText(Long chatId) {
         List<CartItem> cart = carts.getOrDefault(chatId, List.of());
         if (cart.isEmpty()) return "Giỏ hàng trống.";
-        StringBuilder sb = new StringBuilder("🛒 GIỎ HÀNG:\n");
+        StringBuilder sb = new StringBuilder("🛒 GIỎ HÀNG CỦA BẠN:\n");
         int total = 0;
-        for (CartItem i : cart) {
-            int sub = i.unitPrice() * i.quantity();
+        for (CartItem item : cart) {
+            int sub = item.unitPrice() * item.quantity();
             total += sub;
-            sb.append("- ").append(i.productName()).append(" (").append(i.size()).append(") x").append(i.quantity()).append(": ").append(sub).append(" VND\n");
+            sb.append(String.format("%s (%s) x%d: %,dđ\n", item.productName(), item.size(), item.quantity(), sub));
         }
-        sb.append("Tổng: ").append(total).append(" VND");
+        sb.append("Tổng cộng: ").append(String.format("%,dđ", total));
         return sb.toString();
     }
 
-    private void send(Long chatId, String msg) {
-        try { execute(SendMessage.builder().chatId(chatId.toString()).text(msg).build()); } catch (Exception e) {}
+    private void send(Long chatId, String message) {
+        try {
+            execute(SendMessage.builder().chatId(chatId.toString()).text(message).build());
+        } catch (TelegramApiException e) {
+            log.error("Send error", e);
+        }
     }
 
-    private void sendQrImage(Long chatId, String qr) {
-        try {
-            String url = "https://quickchart.io/qr?size=320&text=" + java.net.URLEncoder.encode(qr, "UTF-8");
-            execute(org.telegram.telegrambots.meta.api.methods.send.SendPhoto.builder().chatId(chatId.toString())
-                    .photo(new org.telegram.telegrambots.meta.api.objects.InputFile(url)).caption("QR Thanh toán").build());
-        } catch (Exception e) {}
+    private boolean tryHandleNaturalAdd(Long chatId, String text) {
+        Pattern p = Pattern.compile("(?i)(?:thêm|add)\\s+(\\d+)\\s+([a-z]{2,5}\\d{2})\\s+size\\s+([ml])");
+        Matcher m = p.matcher(text);
+        if (m.find()) {
+            handleAdd(chatId, "/add " + m.group(2) + " " + m.group(3) + " " + m.group(1));
+            return true;
+        }
+        return false;
     }
 
     private boolean allowRequest(Long chatId) {
@@ -259,12 +380,34 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         Long last = lastRequestAt.put(chatId, now);
         return last == null || (now - last) >= REQUEST_COOLDOWN_MS;
     }
-    private void touchCart(Long chatId) { cartTouchedAt.put(chatId, System.currentTimeMillis()); }
-    private void clearExpiredCartIfNeeded(Long chatId) {
-        Long t = cartTouchedAt.get(chatId);
-        if (t != null && (System.currentTimeMillis() - t > CART_TIMEOUT_MS)) { carts.remove(chatId); cartTouchedAt.remove(chatId); }
+
+    private void touchCart(Long chatId) {
+        cartTouchedAt.put(chatId, System.currentTimeMillis());
     }
+
+    private void clearExpiredCartIfNeeded(Long chatId) {
+        Long last = cartTouchedAt.get(chatId);
+        if (last != null && (System.currentTimeMillis() - last > CART_TIMEOUT_MS)) {
+            carts.remove(chatId);
+            cartTouchedAt.remove(chatId);
+        }
+    }
+
+    private void sendQrImage(Long chatId, String qrRaw) {
+        try {
+            String url = "https://quickchart.io/qr?size=320&text=" + java.net.URLEncoder.encode(qrRaw, "UTF-8");
+            execute(org.telegram.telegrambots.meta.api.methods.send.SendPhoto.builder()
+                    .chatId(chatId.toString())
+                    .photo(new org.telegram.telegrambots.meta.api.objects.InputFile(url))
+                    .caption("Quét mã để thanh toán")
+                    .build());
+        } catch (Exception e) {
+            log.error("QR error", e);
+        }
+    }
+
     private boolean acquireCheckoutLock(Long chatId) { return checkoutLocks.putIfAbsent(chatId, true) == null; }
     private void releaseCheckoutLock(Long chatId) { checkoutLocks.remove(chatId); }
+
     private record CartItem(String productId, String productName, String size, int quantity, int unitPrice) {}
 }
