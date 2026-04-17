@@ -9,6 +9,7 @@ public class IntentResult {
     private String intent;
     private String productId;
     private String size;
+    private String address;
     private Integer quantity;
     private String customerName;
     private String customerPhone;

@@ -171,37 +171,43 @@ public class RagService {
 
             String joinedContext = String.join("\n\n", contexts);
 
-            // Prompt cải tiến: strict, structured, intelligent
             String prompt = """
-                    BẠN LÀ TRỢ LÝ QUÁN TRÀ SỮA KHANHS TEA SHOP.
-                    **LUẬT LỆ TRẢ LỜI:**
-                    1. CHỈ được trả lời dựa trên thông tin trong CONTEXT
-                    2. KHÔNG được tự bịa hoặc suy đoán thêm thông tin ngoài CONTEXT
-                    3. Nếu câu hỏi không liên quan đến menu hoặc FAQ trong CONTEXT, trả lời:
-                       "Mình chỉ biết về menu trà sữa, bạn tìm gì vậy?"
-                    4. Trả lời bằng tiếng Việt, ngắn gọn, tự nhiên
-                    5. Nếu khách hỏi về sản phẩm, LUÔN gợi ý thêm các sản phẩm liên quan trong CONTEXT (nếu có)
-                    
-                    **FORMAT TRẢ LỜI:**
-                    - Trả lời ngắn gọn, đúng trọng tâm
-                    - Nếu có gợi ý sản phẩm, liệt kê theo format:
-                      Mã - Tên - Giá (M/L nếu có)
-                    
-                    Ví dụ:
-                    "Bạn thích trà sữa? Mình gợi ý: TS01 - Trà sữa truyền thống (35k/M - 45k/L), TS02 - Trà sữa matcha (35k/M - 45k/L)"
-                    
-                    **LƯU Ý:**
-                    - Nếu thông tin không có trong CONTEXT, phải từ chối trả lời
-                    - Không thêm mô tả ngoài dữ liệu có sẵn
-                    
-                    **CONTEXT:**
-                    ${joinedContext}
-                    
-                    **CÂU HỎI KHÁCH:**
-                    ${question}
-                    
-                    **TRẢ LỜI:**
-                """.formatted(joinedContext, question);
+    BẠN LÀ BỘ NÃO CỦA HỆ THỐNG TRÀ SỮA KHANHS TEA SHOP.
+    NHIỆM VỤ: Phân tích tin nhắn và trả về DUY NHẤT một chuỗi JSON hợp lệ. Không được thêm văn bản thừa ngoài JSON.
+
+    **LUẬT PHÂN LOẠI INTENT:**
+    1. "ADD_ITEM": Khách muốn mua, thêm món, chọn size (VD: "lấy 1 TS01", "thêm ly trà sữa").
+    2. "CHECKOUT": Khách muốn tính tiền, thanh toán hoặc cung cấp địa chỉ/SĐT giao hàng.
+    3. "SHOW_MENU": Khách muốn xem danh sách món.
+    4. "SHOW_CART": Khách muốn kiểm tra giỏ hàng hiện tại.
+    5. "CLEAR": Khách muốn xóa/hủy giỏ hàng.
+    6. "CHITCHAT": Chào hỏi hoặc hỏi về thông tin quán (giờ mở cửa, phí ship) dựa trên CONTEXT.
+
+    **YÊU CẦU DỮ LIỆU:**
+    - Nếu không có thông tin productId, customerName, customerPhone, address -> Để giá trị là null.
+    - Size mặc định là "M" nếu khách không nói. Quantity mặc định là 1.
+    - Trường "response" là câu trả lời tự nhiên, thân thiện.
+
+    **CONTEXT:**
+    ${joinedContext}
+
+    **CẤU TRÚC JSON:**
+    {
+      "intent": "ADD_ITEM" | "CHECKOUT" | "SHOW_MENU" | "SHOW_CART" | "CLEAR" | "CHITCHAT",
+      "productId": "string",
+      "size": "M" | "L",
+      "quantity": number,
+      "customerName": "string",
+      "customerPhone": "string",
+      "address": "string",
+      "response": "string"
+    }
+
+    **CÂU HỎI CỦA KHÁCH:**
+    ${question}
+
+    **JSON TRẢ LỜI:**
+""".formatted(joinedContext, question);
 
             String url = "https://generativelanguage.googleapis.com/v1beta/models/"
                     + model
