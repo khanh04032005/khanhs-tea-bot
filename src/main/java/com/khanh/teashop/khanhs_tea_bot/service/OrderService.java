@@ -30,6 +30,7 @@ public class OrderService {
         Order order = new Order();
         order.setCustomerName(request.getCustomerName().trim());
         order.setCustomerPhone(request.getCustomerPhone().trim());
+        order.setAddress(request.getAddress() != null ? request.getAddress().trim() : "Nhận tại cửa hàng");
         order.setStatus(OrderStatus.PENDING);
         order.setTotalAmount(0);
 
@@ -105,6 +106,7 @@ public class OrderService {
                 .id(order.getId())
                 .customerName(order.getCustomerName())
                 .customerPhone(order.getCustomerPhone())
+                .address(order.getAddress())
                 .status(order.getStatus().name())
                 .totalAmount(order.getTotalAmount())
                 .createdAt(order.getCreatedAt())

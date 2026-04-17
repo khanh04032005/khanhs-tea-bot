@@ -40,6 +40,9 @@ public class Order {
     @Column(name = "customer_phone", nullable = false, length = 20)
     private String customerPhone;
 
+    @Column(name = "address", length = 500)
+    private String address;
+
     @Column(name = "telegram_chat_id")
     private Long telegramChatId;
 

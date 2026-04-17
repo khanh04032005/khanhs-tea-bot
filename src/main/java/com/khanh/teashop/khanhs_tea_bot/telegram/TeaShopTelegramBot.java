@@ -84,19 +84,19 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         try {
             if ("/start".equalsIgnoreCase(text)) {
                 send(chatId, """
-            Xin chào, mình là TeaShop Assistant Bot 👋
-            Lệnh:
-            /menu
-            /add <productId> <M|L> <quantity>
-            /remove <productId> <M|L>
-            /cart
-            /checkout <ten_khach> <so_dien_thoai>
-            /cancel <orderId>
-            /clear
+        Xin chào, mình là TeaShop Assistant Bot 👋
+        Lệnh:
+        /menu - Xem thực đơn
+        /add <mã> <size> <số_lượng> - Thêm món
+        /cart - Xem giỏ hàng
+        /checkout <tên> <sđt> [địa chỉ] - Thanh toán đơn hàng
+        /clear - Xóa giỏ hàng
 
-            Sau /checkout bot sẽ gửi link thanh toán (và mã QR nếu có).
-            Chuyển khoản thành công, bot sẽ tự báo trạng thái đơn.
-            """);
+        💡 Lưu ý: 
+        - Phần [địa chỉ] là tùy chọn. Nếu bạn muốn giao hàng, vui lòng nhập địa chỉ cụ thể.
+        - Nếu không nhập địa chỉ, chúng mình sẽ chuẩn bị đơn để bạn nhận tại cửa hàng.
+        - Sau khi checkout, bạn sẽ nhận được link thanh toán.
+        """);
                 return;
             }
 
@@ -342,33 +342,36 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         }
 
         try {
-            String[] parts = text.split("\\s+");
+            // Tách tối đa thành 4 phần: 0:/checkout, 1:tên, 2:sđt, 3:địa chỉ (nếu có)
+            String[] parts = text.split("\\s+", 4);
+
             if (parts.length < 3) {
-                send(chatId, "Sai cú pháp. Dùng: /checkout <ten_khach> <so_dien_thoai>");
+                send(chatId, "Sai cú pháp. Dùng: /checkout <ten_khach> <so_dien_thoai> [địa chỉ]");
                 return;
             }
 
             String customerName = parts[1].trim();
             String customerPhone = parts[2].trim();
 
+            // Kiểm tra xem có phần địa chỉ không
+            String address = (parts.length == 4) ? parts[3].trim() : "Nhận tại cửa hàng";
+
             if (!customerPhone.matches("^[0-9+]{9,15}$")) {
                 send(chatId, "Số điện thoại không hợp lệ.");
                 return;
             }
 
-            List<CreateOrderItemRequest> items = cart.stream()
-                    .map(item -> CreateOrderItemRequest.builder()
-                            .productId(item.productId())
-                            .size(item.size())
-                            .quantity(item.quantity())
-                            .build())
-                    .toList();
-
+            // Tạo request gửi xuống OrderService
             CreateOrderRequest request = CreateOrderRequest.builder()
                     .customerName(customerName)
                     .customerPhone(customerPhone)
+                    .address(address)
                     .telegramChatId(chatId)
-                    .items(items)
+                    .items(cart.stream().map(item -> CreateOrderItemRequest.builder()
+                            .productId(item.productId())
+                            .size(item.size())
+                            .quantity(item.quantity())
+                            .build()).toList())
                     .build();
 
             OrderResponse response = orderService.createOrder(request);

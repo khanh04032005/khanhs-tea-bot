@@ -23,6 +23,8 @@ public class CreateOrderRequest {
     @NotBlank(message = "customerPhone is required")
     private String customerPhone;
 
+    private String address;
+
     private Long telegramChatId;
 
     @NotEmpty(message = "items must not be empty")
