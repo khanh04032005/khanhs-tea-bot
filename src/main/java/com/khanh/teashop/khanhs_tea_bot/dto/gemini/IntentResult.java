@@ -13,4 +13,5 @@ public class IntentResult {
     private Integer quantity;
     private String customerName;
     private String customerPhone;
+    private String response;
 }
