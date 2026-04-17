@@ -78,7 +78,7 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         clearExpiredCartIfNeeded(chatId);
 
         try {
-            // 1. Cập nhật lệnh /start để hướng dẫn địa chỉ là tùy chọn
+            // 1. Cập nhật nội dung hướng dẫn lệnh /start
             if ("/start".equalsIgnoreCase(text)) {
                 send(chatId, """
             Xin chào, mình là TeaShop Assistant Bot 👋
@@ -92,9 +92,9 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
             /clear - Xóa giỏ hàng
 
             💡 Lưu ý:
-            - Phần [địa chỉ] là tùy chọn. Nếu cần giao hàng, hãy nhập địa chỉ sau SĐT.
-            - Nếu không có địa chỉ, quán sẽ chuẩn bị để bạn nhận tại cửa hàng.
-            - Sau /checkout bot sẽ gửi link thanh toán (và mã QR).
+            - Phần [địa chỉ] là không bắt buộc. Nếu bạn muốn giao hàng, hãy nhập địa chỉ sau SĐT.
+            - Nếu bỏ trống địa chỉ, mặc định đơn sẽ được nhận tại cửa hàng.
+            - Sau /checkout bot sẽ gửi link thanh toán và mã QR.
             """);
                 return;
             }
@@ -167,7 +167,7 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
                 return;
             }
 
-            // 2. Cập nhật xử lý CHECKOUT qua AI (Gemini)
+            // Xử lý CHECKOUT thông qua AI
             if ("CHECKOUT".equalsIgnoreCase(intent.getIntent())
                     && intent.getCustomerName() != null
                     && intent.getCustomerPhone() != null) {
@@ -191,7 +191,7 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    // --- CÁC PHƯƠNG THỨC XỬ LÝ CHÍNH ---
+    // --- PHƯƠNG THỨC THANH TOÁN CẬP NHẬT ĐỊA CHỈ ---
 
     private void handleCheckout(Long chatId, String text) {
         List<CartItem> cart = carts.getOrDefault(chatId, List.of());
@@ -206,7 +206,7 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         }
 
         try {
-            // Tách tối đa 4 phần để phần 4 là toàn bộ địa chỉ (nếu có)
+            // Tách tối đa 4 phần: 0:lệnh, 1:tên, 2:sđt, 3:địa chỉ (phần còn lại)
             String[] parts = text.split("\\s+", 4);
             if (parts.length < 3) {
                 send(chatId, "Sai cú pháp. Dùng: /checkout <tên> <sđt> [địa chỉ]");
@@ -216,7 +216,7 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
             String customerName = parts[1].trim();
             String customerPhone = parts[2].trim();
 
-            // 3. Logic địa chỉ linh hoạt: Nếu không có phần 4 thì ghi mặc định
+            // Nếu có phần thứ 4 thì lấy làm địa chỉ, nếu không mặc định là tại quầy
             String address = (parts.length == 4) ? parts[3].trim() : "Nhận tại cửa hàng";
 
             if (!customerPhone.matches("^[0-9+]{9,15}$")) {
@@ -232,10 +232,11 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
                             .build())
                     .toList();
 
+            // Gửi dữ liệu xuống OrderService (Hãy đảm bảo CreateOrderRequest đã có field address)
             CreateOrderRequest request = CreateOrderRequest.builder()
                     .customerName(customerName)
                     .customerPhone(customerPhone)
-                    .address(address) // Gán địa chỉ vào request
+                    .address(address)
                     .telegramChatId(chatId)
                     .items(items)
                     .build();
@@ -248,16 +249,18 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
 
             send(chatId, """
                 Tạo đơn thành công ✅
-                Mã đơn: %d
+                Mã đơn: #%d
                 Khách hàng: %s
+                SĐT: %s
                 Địa chỉ: %s
                 Tổng tiền: %,d VND
                 
-                Vui lòng thanh toán qua link:
+                Vui lòng thanh toán qua link dưới đây:
                 %s
                 """.formatted(
                     response.getId(),
                     customerName,
+                    customerPhone,
                     address,
                     response.getTotalAmount(),
                     payment.getCheckoutUrl()
@@ -309,8 +312,6 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         touchCart(chatId);
         send(chatId, "Đã thêm: " + product.getName() + " (" + size + ") x" + quantity);
     }
-
-    // --- HELPERS (Giữ nguyên các hàm bổ trợ khác của bạn) ---
 
     private void handleRemove(Long chatId, String text) {
         String[] parts = text.split("\\s+");
