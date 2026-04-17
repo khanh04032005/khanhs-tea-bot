@@ -59,83 +59,76 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         clearExpiredCartIfNeeded(chatId);
 
         try {
-            // --- BƯỚC 1: KIỂM TRA TỪ KHÓA CỨNG (ĂN NGAY KHÔNG CẦN AI) ---
+            // --- 1. XỬ LÝ CỨNG CHO "THÊM/ĐẶT" (KHÔNG CẦN AI) ---
+            // Nếu câu có chữ "thêm" hoặc "đặt" + Mã món (VD: TS01)
+            if (lowerText.contains("thêm") || lowerText.contains("đặt") || lowerText.contains("lấy")) {
+                // Regex tìm mã món (2-3 chữ cái + 2 số)
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("([A-Z]{2,3}\\d{2})").matcher(text.toUpperCase());
+                if (m.find()) {
+                    String productId = m.group(1);
+                    String size = lowerText.contains(" l") ? "L" : "M";
+                    // Tìm số lượng
+                    java.util.regex.Matcher qtyM = java.util.regex.Pattern.compile("(\\d+)").matcher(text);
+                    int qty = 1;
+                    while (qtyM.find()) {
+                        int val = Integer.parseInt(qtyM.group(1));
+                        if (val < 10) qty = val; // Tránh nhầm với mã món
+                    }
+                    handleAdd(chatId, "/add " + productId + " " + size + " " + qty);
+                    return; // Xong việc, không gọi AI nữa
+                }
+            }
 
-            // Nhắc menu là hiện menu
-            if (lowerText.contains("menu") || lowerText.contains("thực đơn") || lowerText.contains("xem món")) {
+            // --- 2. XỬ LÝ CỨNG CHO "MỞ CỬA" (KHÔNG CẦN AI) ---
+            if (lowerText.contains("mấy giờ") || lowerText.contains("mở cửa") || lowerText.contains("địa chỉ")) {
+                // Trả về thông tin cứng luôn cho nhanh
+                send(chatId, "🏠 Khanh's Tea Shop mở cửa từ 8:00 - 22:00 hàng ngày nè!\n📍 Địa chỉ: Quận 12, TP.HCM.");
+                return;
+            }
+
+            // --- 3. XỬ LÝ CỨNG CHO "MENU" ---
+            if (lowerText.contains("menu") || lowerText.contains("thực đơn")) {
                 send(chatId, buildMenuText());
                 return;
             }
 
-            // Nhắc thanh toán/checkout là hiện QR/Checkout
-            if (lowerText.contains("thanh toán") || lowerText.contains("tính tiền")
-                    || lowerText.contains("checkout") || lowerText.contains("trả tiền")) {
+            // --- 4. NẾU KHÔNG RƠI VÀO CÁC CÂU TRÊN MỚI GỌI AI ---
+            IntentResult intent = geminiIntentService.parseIntent(text, productService.getAllProducts());
 
-                // Nếu khách chỉ nói mỗi "thanh toán", mình nhắc họ nhập thông tin
-                if (lowerText.equals("thanh toán") || lowerText.equals("tính tiền") || lowerText.equals("checkout")) {
-                    send(chatId, "Bạn vui lòng nhập: Tên + SĐT + Địa chỉ để mình gửi link thanh toán nha!");
-                    return;
-                }
-                // Nếu có kèm thông tin khác, để AI xử lý tiếp ở dưới
-            }
-
-            if (text.startsWith("/")) {
-                handleSystemCommands(chatId, text);
+            // Nếu AI báo "Máy chủ bận" (Response trả về câu đó), mình chặn lại luôn
+            if (intent.getResponse() != null && intent.getResponse().contains("Máy chủ đang bận")) {
+                send(chatId, "Dạ shop nghe nè, bạn muốn đặt trà sữa hay xem menu ạ?");
                 return;
             }
 
-            // --- BƯỚC 2: GỌI AI ĐỂ XỬ LÝ CÁC CÂU PHỨC TẠP ---
-            IntentResult intent = geminiIntentService.parseIntent(text, productService.getAllProducts());
-            String intentStr = (intent.getIntent() != null) ? intent.getIntent().toUpperCase() : "CHITCHAT";
-
-            switch (intentStr) {
+            switch (intent.getIntent().toUpperCase()) {
                 case "ADD_ITEM":
                     if (intent.getProductId() != null) {
                         String sz = (intent.getSize() != null) ? intent.getSize().toUpperCase() : "M";
-                        int q = (intent.getQuantity() != null && intent.getQuantity() > 0) ? intent.getQuantity() : 1;
+                        int q = (intent.getQuantity() != null) ? intent.getQuantity() : 1;
                         handleAdd(chatId, "/add " + intent.getProductId() + " " + sz + " " + q);
-                    } else {
-                        send(chatId, "Bạn muốn thêm món nào nè? Nhắn mã món (VD: TS01) nha.");
                     }
                     break;
-
                 case "CHECKOUT":
-                    // AI bóc tách được Tên, SĐT thì tiến hành thanh toán luôn
                     if (intent.getCustomerName() != null && intent.getCustomerPhone() != null) {
                         String adr = (intent.getAddress() != null) ? intent.getAddress() : "Tại cửa hàng";
                         handleCheckout(chatId, "/checkout " + intent.getCustomerName() + " " + intent.getCustomerPhone() + " " + adr);
                     } else {
-                        send(chatId, "Bạn vui lòng cho mình xin Tên và SĐT để làm đơn thanh toán nhé!");
+                        send(chatId, "Cho mình xin Tên + SĐT để tính tiền nhé!");
                     }
                     break;
-
                 case "SHOW_MENU":
                     send(chatId, buildMenuText());
                     break;
-
-                case "SHOW_CART":
-                    send(chatId, buildCartText(chatId));
-                    break;
-
-                case "CLEAR":
-                    carts.remove(chatId);
-                    send(chatId, "Đã dọn sạch giỏ hàng rồi nhé.");
-                    break;
-
                 default:
-                    // Nếu AI trả về câu trả lời tự nhiên (response)
-                    if (intent.getResponse() != null && !intent.getResponse().isBlank()) {
-                        send(chatId, intent.getResponse());
-                    } else {
-                        String ragAnswer = ragService.answerMenuQuestion(text);
-                        send(chatId, ragAnswer != null ? ragAnswer : "Dạ, shop nghe nè! Bạn muốn xem /menu hay đặt món gì ạ?");
-                    }
+                    String ragAnswer = ragService.answerMenuQuestion(text);
+                    send(chatId, (ragAnswer != null && !ragAnswer.contains("Máy chủ")) ? ragAnswer : "Bạn nhắn 'menu' để xem món nhé!");
                     break;
             }
 
         } catch (Exception e) {
-            log.error("Bot Error: ", e);
-            send(chatId, "Máy chủ bận xíu, bạn thử lại sau nha.");
+            log.error("Lỗi: ", e);
+            send(chatId, "Bạn nhắn 'menu' để xem món nhé!");
         }
     }
     private boolean isRelatedToShop(String text) {
