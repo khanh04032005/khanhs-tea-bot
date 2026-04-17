@@ -32,7 +32,7 @@ public class GeminiIntentService {
         IntentResult unknown = new IntentResult();
         unknown.setIntent("CHITCHAT");
         // Đảm bảo không bị null response để bot không im lặng
-        unknown.setResponse("Dạ, bạn cần mình hỗ trợ gì về menu trà sữa không?");
+        unknown.setResponse(null);
 
         try {
             if (apiKey == null || apiKey.isBlank()) return unknown;
@@ -45,25 +45,20 @@ public class GeminiIntentService {
 
             // Prompt tối ưu: Thêm các quy tắc bóc tách mã món chuẩn xác
             String prompt = """
-                    Bạn là bộ não của TeaShop Bot. Hãy phân tích câu chat của khách và trả về JSON thuần.
-                    
-                    LUẬT INTENT:
-                    - ADD_ITEM: Khách muốn mua/thêm món. Nếu khách nhắc mã món (VD: TS01) hoặc tên món, hãy điền productId. Mặc định size M, quantity 1.
-                    - CHECKOUT: Khách muốn tính tiền hoặc cung cấp (Tên, SĐT, Địa chỉ). Hãy bóc tách địa chỉ vào trường 'address'.
-                    - SHOW_MENU: Khách muốn xem danh sách món.
-                    - SHOW_CART: Khách hỏi giỏ hàng có gì.
-                    - CLEAR: Khách muốn xóa/hủy giỏ.
-                    - CHITCHAT: Chào hỏi, hoặc hỏi thông tin quán (giờ mở cửa, địa chỉ quán). Hãy soạn câu trả lời vào trường 'response'.
-                    
-                    SCHEMA JSON:
-                    {"intent":"...","productId":null,"size":null,"quantity":null,"customerName":null,"customerPhone":null,"address":null,"response":"Câu trả lời ngắn gọn"}
-                    
-                    Menu:
-                    %s
-                    
-                    Chat của khách:
-                    %s
-                    """.formatted(menu, userText);
+    Bạn là bộ não của TeaShop Bot. Hãy phân tích câu chat của khách và trả về JSON thuần.
+    
+    LUẬT INTENT (QUAN TRỌNG):
+    - SHOW_MENU: Nếu khách nói "menu", "cho xem menu", "có món gì", "thực đơn". (BẮT BUỘC dùng intent này cho các câu hỏi về danh sách món).
+    - ADD_ITEM: Khách muốn mua/thêm món cụ thể (VD: TS01, trà sữa...).
+    - CHECKOUT: Khách muốn tính tiền hoặc đưa thông tin giao hàng.
+    - CHITCHAT: Chỉ dùng cho chào hỏi (Hi, Alo) hoặc hỏi giờ mở cửa, địa chỉ quán.
+    
+    SCHEMA JSON:
+    {"intent":"...","productId":null,"size":null,"quantity":null,"customerName":null,"customerPhone":null,"address":null,"response":null}
+    
+    Menu: %s
+    User: %s
+    """.formatted(menu, userText);
 
             Map<String, Object> body = new HashMap<>();
             body.put("contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
