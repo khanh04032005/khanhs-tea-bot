@@ -30,7 +30,7 @@ public class GeminiIntentService {
 
     public IntentResult parseIntent(String userText, List<Product> products) {
         IntentResult unknown = new IntentResult();
-        unknown.setIntent("CHITCHAT"); // Mặc định là trò chuyện nếu không hiểu
+        unknown.setIntent("CHITCHAT");
 
         try {
             if (apiKey == null || apiKey.isBlank()) return unknown;
@@ -41,26 +41,22 @@ public class GeminiIntentService {
                     .reduce((a, b) -> a + "\n" + b)
                     .orElse("");
 
-            // PROMPT NÂNG CẤP: ÉP AI BÓC TÁCH ĐỊA CHỈ VÀ PHÂN LOẠI CHUẨN
             String prompt = """
-                    Bạn là bộ não của TeaShop Bot. Hãy phân tích câu chat của khách và trả về JSON thuần.
+                    Bạn là trợ lý ảo của TeaShop. Phân tích câu chat và trả về JSON thuần.
                     
                     LUẬT INTENT:
-                    - ADD_ITEM: Khách muốn mua/thêm món (Mặc định size M, quantity 1 nếu khách không nói).
-                    - CHECKOUT: Khách muốn tính tiền hoặc cung cấp (Tên, SĐT, Địa chỉ).
-                    - SHOW_MENU: Khách muốn xem menu.
-                    - SHOW_CART: Khách hỏi giỏ hàng có gì.
-                    - CLEAR: Khách muốn xóa giỏ.
-                    - CHITCHAT: Chào hỏi, hỏi giờ mở cửa, hoặc nói chuyện không liên quan.
+                    - ADD_ITEM: Khách muốn mua/thêm món (VD: "thêm 1 ly TS01").
+                    - CHECKOUT: Khách muốn tính tiền/thanh toán hoặc đưa thông tin: Tên, SĐT, Địa chỉ.
+                    - SHOW_MENU: Khách muốn xem menu (VD: "menu có gì", "cho xem menu").
+                    - SHOW_CART: Xem giỏ hàng.
+                    - CLEAR: Xóa giỏ.
+                    - CHITCHAT: Chào hỏi, hỏi giờ mở cửa, phí ship, địa chỉ quán (dựa trên context).
                     
-                    SCHEMA JSON TRẢ VỀ:
-                    {"intent":"...","productId":null,"size":null,"quantity":null,"customerName":null,"customerPhone":null,"address":null,"response":"Câu trả lời ngắn gọn cho khách"}
+                    SCHEMA JSON:
+                    {"intent":"...","productId":null,"size":null,"quantity":null,"customerName":null,"customerPhone":null,"address":null,"response":"Câu trả lời tự nhiên"}
                     
-                    Menu sản phẩm:
-                    %s
-                    
-                    Câu chat của khách:
-                    %s
+                    Menu: %s
+                    User: %s
                     """.formatted(menu, userText);
 
             Map<String, Object> body = new HashMap<>();
@@ -72,14 +68,12 @@ public class GeminiIntentService {
             headers.setContentType(MediaType.APPLICATION_JSON);
 
             String response = restTemplate.postForObject(url, new HttpEntity<>(body, headers), String.class);
-
             JsonNode root = objectMapper.readTree(response);
             String json = root.path("candidates").path(0).path("content").path("parts").path(0).path("text").asText().trim();
 
-            // Ép kiểu về IntentResult (Nhớ đảm bảo class IntentResult đã có field address và response)
             return objectMapper.readValue(json, IntentResult.class);
-        } catch (Exception exception) {
-            log.error("Gemini parse error", exception);
+        } catch (Exception e) {
+            log.error("Gemini parse error", e);
             return unknown;
         }
     }

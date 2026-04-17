@@ -54,26 +54,16 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         String text = update.getMessage().getText().trim();
         Long chatId = update.getMessage().getChatId();
 
-        if (text.length() > MAX_MESSAGE_LENGTH) { send(chatId, "Tin nhắn quá dài."); return; }
-        if (!allowRequest(chatId)) { send(chatId, "Thao tác quá nhanh, chờ chút nhé."); return; }
-
+        if (!allowRequest(chatId)) return;
         clearExpiredCartIfNeeded(chatId);
 
         try {
-            // 1. LỆNH HỆ THỐNG
             if (text.startsWith("/")) {
                 handleSystemCommands(chatId, text);
                 return;
             }
 
-            // 2. XỬ LÝ NHANH CÂU CHÀO (Để bot phản hồi lẹ hơn, không tốn tiền AI)
-            String lower = text.toLowerCase();
-            if (List.of("alo", "hi", "hello", "ê").contains(lower)) {
-                send(chatId, "Chào bạn! Mình có thể giúp gì cho bạn về menu trà sữa không?");
-                return;
-            }
-
-            // 3. DÙNG AI ĐOÁN Ý ĐỊNH
+            // ƯU TIÊN AI ĐOÁN Ý ĐỊNH TRƯỚC
             IntentResult intent = geminiIntentService.parseIntent(text, productService.getAllProducts());
 
             switch (intent.getIntent().toUpperCase()) {
@@ -82,6 +72,8 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
                         String sz = (intent.getSize() != null) ? intent.getSize().toUpperCase() : "M";
                         int q = (intent.getQuantity() != null) ? intent.getQuantity() : 1;
                         handleAdd(chatId, "/add " + intent.getProductId() + " " + sz + " " + q);
+                    } else {
+                        send(chatId, "Bạn muốn thêm món nào nè?");
                     }
                     break;
 
@@ -90,7 +82,7 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
                         String adr = (intent.getAddress() != null) ? intent.getAddress() : "Tại cửa hàng";
                         handleCheckout(chatId, "/checkout " + intent.getCustomerName() + " " + intent.getCustomerPhone() + " " + adr);
                     } else {
-                        send(chatId, "Để thanh toán, bạn vui lòng cung cấp: Tên + SĐT + Địa chỉ (nếu có) nhé.");
+                        send(chatId, "Nhập Tên + SĐT (+ Địa chỉ nếu ship) để mình tính tiền nha.");
                     }
                     break;
 
@@ -104,23 +96,20 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
 
                 case "CLEAR":
                     carts.remove(chatId);
-                    send(chatId, "Giỏ hàng đã được dọn sạch.");
+                    send(chatId, "Đã dọn sạch giỏ hàng.");
                     break;
 
-                default:
-                    // CHỈ GỌI RAG KHI CÓ TỪ KHÓA LIÊN QUAN TRÀ SỮA (Để tránh trả lời ngu)
-                    if (isRelatedToShop(text)) {
-                        String ragAnswer = ragService.answerMenuQuestion(text);
-                        send(chatId, ragAnswer != null ? ragAnswer : "Bạn cần hỏi gì về menu trà sữa nè?");
+                default: // Xử lý CHITCHAT hoặc hỏi đáp
+                    if (intent.getResponse() != null && !intent.getResponse().isBlank()) {
+                        send(chatId, intent.getResponse());
                     } else {
-                        send(chatId, "Xin lỗi, mình chỉ hỗ trợ đặt trà sữa thôi. Bạn xem /menu nhé!");
+                        String ragAnswer = ragService.answerMenuQuestion(text);
+                        send(chatId, ragAnswer != null ? ragAnswer : "Bạn cần hỗ trợ gì về menu không?");
                     }
                     break;
             }
-
         } catch (Exception e) {
-            log.error("Error", e);
-            send(chatId, "Hệ thống bận, bạn thử lại sau nha.");
+            send(chatId, "Hệ thống bận xíu, thử lại nha.");
         }
     }
 
