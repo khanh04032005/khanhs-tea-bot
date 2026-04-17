@@ -29,19 +29,11 @@ public class GeminiIntentService {
     private final RestTemplate restTemplate = new RestTemplate();
 
     public IntentResult parseIntent(String userText, List<Product> products) {
-
         IntentResult unknown = new IntentResult();
-        unknown.setIntent("UNKNOWN");
-
-        if (userText.length() > 200) {
-            return unknown;
-        }
+        unknown.setIntent("CHITCHAT"); // Mặc định là trò chuyện nếu không hiểu
 
         try {
-            if (apiKey == null || apiKey.isBlank()) {
-                log.warn("GEMINI_API_KEY is empty");
-                return unknown;
-            }
+            if (apiKey == null || apiKey.isBlank()) return unknown;
 
             String menu = products.stream()
                     .map(p -> p.getId() + " - " + p.getName())
@@ -49,46 +41,43 @@ public class GeminiIntentService {
                     .reduce((a, b) -> a + "\n" + b)
                     .orElse("");
 
+            // PROMPT NÂNG CẤP: ÉP AI BÓC TÁCH ĐỊA CHỈ VÀ PHÂN LOẠI CHUẨN
             String prompt = """
-                    Trả về JSON thuần, không markdown.
-                    Schema:
-                    {"intent":"SHOW_MENU|ADD_ITEM|SHOW_CART|CHECKOUT|CLEAR|UNKNOWN","productId":null,"size":null,"quantity":null,"customerName":null,"customerPhone":null}
+                    Bạn là bộ não của TeaShop Bot. Hãy phân tích câu chat của khách và trả về JSON thuần.
                     
-                    Menu:
+                    LUẬT INTENT:
+                    - ADD_ITEM: Khách muốn mua/thêm món (Mặc định size M, quantity 1 nếu khách không nói).
+                    - CHECKOUT: Khách muốn tính tiền hoặc cung cấp (Tên, SĐT, Địa chỉ).
+                    - SHOW_MENU: Khách muốn xem menu.
+                    - SHOW_CART: Khách hỏi giỏ hàng có gì.
+                    - CLEAR: Khách muốn xóa giỏ.
+                    - CHITCHAT: Chào hỏi, hỏi giờ mở cửa, hoặc nói chuyện không liên quan.
+                    
+                    SCHEMA JSON TRẢ VỀ:
+                    {"intent":"...","productId":null,"size":null,"quantity":null,"customerName":null,"customerPhone":null,"address":null,"response":"Câu trả lời ngắn gọn cho khách"}
+                    
+                    Menu sản phẩm:
                     %s
                     
-                    User:
+                    Câu chat của khách:
                     %s
                     """.formatted(menu, userText);
 
             Map<String, Object> body = new HashMap<>();
-            body.put("contents", List.of(Map.of(
-                    "parts", List.of(Map.of("text", prompt))
-            )));
-            body.put("generationConfig", Map.of(
-                    "responseMimeType", "application/json"
-            ));
+            body.put("contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
+            body.put("generationConfig", Map.of("responseMimeType", "application/json"));
 
             String url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
-
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
             String response = restTemplate.postForObject(url, new HttpEntity<>(body, headers), String.class);
-            log.info("Gemini raw response: {}", response);
 
             JsonNode root = objectMapper.readTree(response);
-            JsonNode textNode = root.path("candidates").path(0).path("content").path("parts").path(0).path("text");
-            if (textNode.isMissingNode() || textNode.asText().isBlank()) {
-                return unknown;
-            }
+            String json = root.path("candidates").path(0).path("content").path("parts").path(0).path("text").asText().trim();
 
-            String json = textNode.asText().trim().replace("```json", "").replace("```", "").trim();
-            IntentResult parsed = objectMapper.readValue(json, IntentResult.class);
-            if (parsed.getIntent() == null || parsed.getIntent().isBlank()) {
-                return unknown;
-            }
-            return parsed;
+            // Ép kiểu về IntentResult (Nhớ đảm bảo class IntentResult đã có field address và response)
+            return objectMapper.readValue(json, IntentResult.class);
         } catch (Exception exception) {
             log.error("Gemini parse error", exception);
             return unknown;

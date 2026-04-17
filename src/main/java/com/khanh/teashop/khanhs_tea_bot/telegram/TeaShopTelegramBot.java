@@ -195,10 +195,30 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
 
     // Các hàm helper (send, sendQrImage, buildMenuText...) giữ nguyên như của bạn nhưng viết gọn lại
     private String buildMenuText() {
-        StringBuilder sb = new StringBuilder("🧋 MENU\n");
-        productService.getAllProducts().stream().filter(Product::isAvailable).forEach(p ->
-                sb.append("- ").append(p.getId()).append(": ").append(p.getName()).append(" (").append(p.getPriceM()).append("/").append(p.getPriceL()).append(")\n"));
-        return sb.toString();
+        List<Product> products = productService.getAllProducts().stream()
+                .filter(Product::isAvailable)
+                // Sắp xếp theo Category trước, sau đó mới đến ID món
+                .sorted(Comparator.comparing(Product::getCategory).thenComparing(Product::getId))
+                .toList();
+
+        StringBuilder builder = new StringBuilder("🧋 MENU\n");
+        String currentCategory = "";
+
+        for (Product product : products) {
+            // Nếu chuyển sang danh mục mới thì in tên danh mục đó ra
+            if (!product.getCategory().equals(currentCategory)) {
+                currentCategory = product.getCategory();
+                builder.append("\n").append(currentCategory).append("\n");
+            }
+            // In chi tiết món theo định dạng đẹp
+            builder.append("• ").append(product.getId()).append(" - ")
+                    .append(product.getName())
+                    .append(" (M: ").append(product.getPriceM())
+                    .append(", L: ").append(product.getPriceL()).append(")\n");
+        }
+
+        builder.append("\nDùng: /add TS01 M 2");
+        return builder.toString();
     }
 
     private String buildCartText(Long chatId) {
