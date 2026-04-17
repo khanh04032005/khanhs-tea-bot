@@ -137,27 +137,12 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
                 return;
             }
 
-            String lower = text.toLowerCase();
-
-            if (lower.contains("mở cửa") || lower.contains("giờ mở cửa")) {
-                send(chatId, "Quán mở cửa từ 8:00 đến 22:00 mỗi ngày.");
-                return;
-            }
-
-            if (lower.contains("menu")) {
-                send(chatId, buildMenuText());
-                return;
-            }
-
-            if (lower.contains("giỏ") || lower.contains("cart")) {
-                send(chatId, buildCartText(chatId));
-                return;
-            }
-
+            // Natural language add
             if (tryHandleNaturalAdd(chatId, text)) {
                 return;
             }
 
+            // LLM Intent Analysis
             IntentResult intent = geminiIntentService.parseIntent(text, productService.getAllProducts());
 
             if ("SHOW_MENU".equalsIgnoreCase(intent.getIntent())) {
@@ -192,12 +177,7 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
                 return;
             }
 
-            String ragAnswer = ragService.answerMenuQuestion(text);
-            if (ragAnswer != null && !ragAnswer.isBlank()) {
-                send(chatId, ragAnswer);
-                return;
-            }
-
+            // Product ID pattern (TS01, CF02, etc.)
             String upper = text.toUpperCase();
             Matcher itemMatcher = Pattern.compile("\\b([A-Z]{2,5}\\d{2})\\b").matcher(upper);
             if (itemMatcher.find()) {
@@ -207,6 +187,13 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
                         + "\nGiá M: " + p.getPriceM()
                         + "\nGiá L: " + p.getPriceL()
                         + "\nCòn bán: " + (p.isAvailable() ? "Có" : "Không"));
+                return;
+            }
+
+            // RAG Q&A
+            String ragAnswer = ragService.answerMenuQuestion(text);
+            if (ragAnswer != null && !ragAnswer.isBlank()) {
+                send(chatId, ragAnswer);
                 return;
             }
 
