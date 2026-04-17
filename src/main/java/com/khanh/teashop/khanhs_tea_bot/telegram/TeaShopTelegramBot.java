@@ -8,6 +8,8 @@ import com.khanh.teashop.khanhs_tea_bot.dto.payment.PaymentResponse;
 import com.khanh.teashop.khanhs_tea_bot.entity.Product;
 import com.khanh.teashop.khanhs_tea_bot.service.*;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -21,6 +23,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
+import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
@@ -78,21 +82,20 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         clearExpiredCartIfNeeded(chatId);
 
         try {
-            // --- 1. CÁC LỆNH COMMAND CỨNG (BẮT ĐẦU BẰNG /) ---
             if ("/start".equalsIgnoreCase(text)) {
                 send(chatId, """
             Xin chào, mình là TeaShop Assistant Bot 👋
             Lệnh:
-            /menu - Xem thực đơn
-            /add <mã> <size M|L> <số lượng>
-            /cart - Xem giỏ hàng
-            /checkout <tên> <sđt> [địa chỉ]
-            /clear - Xóa giỏ hàng
-            /cancel <mã_đơn>
+            /menu
+            /add <productId> <M|L> <quantity>
+            /remove <productId> <M|L>
+            /cart
+            /checkout <ten_khach> <so_dien_thoai>
+            /cancel <orderId>
+            /clear
 
-            💡 Lưu ý:
-            - Phần [địa chỉ] là tùy chọn. Nếu cần giao hàng hãy nhập địa chỉ sau SĐT.
-            - Nếu bỏ trống địa chỉ, đơn sẽ được chuẩn bị để nhận tại cửa hàng.
+            Sau /checkout bot sẽ gửi link thanh toán (và mã QR nếu có).
+            Chuyển khoản thành công, bot sẽ tự báo trạng thái đơn.
             """);
                 return;
             }
@@ -134,17 +137,15 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
                 return;
             }
 
-            // --- 2. XỬ LÝ NGÔN NGỮ TỰ NHIÊN (KHÔNG DÙNG /) ---
             String lower = text.toLowerCase();
 
-            // Sửa lỗi "hư menu": Chặn từ khóa trước khi trôi xuống RAG
-            if (lower.equals("menu") || lower.contains("xem menu") || lower.contains("cho xem menu") || lower.contains("thực đơn")) {
-                send(chatId, buildMenuText());
+            if (lower.contains("mở cửa") || lower.contains("giờ mở cửa")) {
+                send(chatId, "Quán mở cửa từ 8:00 đến 22:00 mỗi ngày.");
                 return;
             }
 
-            if (lower.contains("mở cửa") || lower.contains("giờ") || lower.contains("mấy giờ")) {
-                send(chatId, "Quán mở cửa từ 8:00 đến 22:00 mỗi ngày.");
+            if (lower.contains("menu")) {
+                send(chatId, buildMenuText());
                 return;
             }
 
@@ -157,7 +158,6 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
                 return;
             }
 
-            // --- 3. XỬ LÝ QUA AI (GEMINI INTENT) ---
             IntentResult intent = geminiIntentService.parseIntent(text, productService.getAllProducts());
 
             if ("SHOW_MENU".equalsIgnoreCase(intent.getIntent())) {
@@ -167,6 +167,13 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
 
             if ("SHOW_CART".equalsIgnoreCase(intent.getIntent())) {
                 send(chatId, buildCartText(chatId));
+                return;
+            }
+
+            if ("CLEAR".equalsIgnoreCase(intent.getIntent())) {
+                carts.remove(chatId);
+                cartTouchedAt.remove(chatId);
+                send(chatId, "Đã xóa giỏ hàng.");
                 return;
             }
 
@@ -181,19 +188,29 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
             if ("CHECKOUT".equalsIgnoreCase(intent.getIntent())
                     && intent.getCustomerName() != null
                     && intent.getCustomerPhone() != null) {
-                String addr = (intent.getAddress() != null) ? " " + intent.getAddress() : "";
-                handleCheckout(chatId, "/checkout " + intent.getCustomerName() + " " + intent.getCustomerPhone() + addr);
+                handleCheckout(chatId, "/checkout " + intent.getCustomerName() + " " + intent.getCustomerPhone());
                 return;
             }
 
-            // --- 4. CUỐI CÙNG MỚI LÀ RAG (HỎI ĐÁP LINH TINH) ---
             String ragAnswer = ragService.answerMenuQuestion(text);
             if (ragAnswer != null && !ragAnswer.isBlank()) {
                 send(chatId, ragAnswer);
                 return;
             }
 
-            send(chatId, "Mục này mình chưa rõ. Bạn dùng /start để xem các lệnh hỗ trợ nhé.");
+            String upper = text.toUpperCase();
+            Matcher itemMatcher = Pattern.compile("\\b([A-Z]{2,5}\\d{2})\\b").matcher(upper);
+            if (itemMatcher.find()) {
+                String itemId = itemMatcher.group(1);
+                Product p = productService.getProductById(itemId);
+                send(chatId, p.getId() + " - " + p.getName()
+                        + "\nGiá M: " + p.getPriceM()
+                        + "\nGiá L: " + p.getPriceL()
+                        + "\nCòn bán: " + (p.isAvailable() ? "Có" : "Không"));
+                return;
+            }
+
+            send(chatId, "Mình chưa hiểu. Dùng /start để xem lệnh.");
         } catch (ResponseStatusException exception) {
             send(chatId, "Lỗi: " + exception.getReason());
         } catch (Exception exception) {
@@ -202,7 +219,116 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    // --- LOGIC THANH TOÁN (CHECKOUT) ---
+    private boolean tryHandleNaturalAdd(Long chatId, String text) {
+        String input = text.trim();
+
+        Pattern p1 = Pattern.compile("(?i).*(thêm|them|add)\\s+(\\d+)\\s+([a-z]{2,5}\\d{2})\\s*(?:size\\s*)?([ml]).*");
+        Matcher m1 = p1.matcher(input);
+        if (m1.matches()) {
+            handleAdd(chatId, "/add " + m1.group(3).toUpperCase() + " " + m1.group(4).toUpperCase() + " " + m1.group(2));
+            return true;
+        }
+
+        Pattern p2 = Pattern.compile("(?i).*(thêm|them|add)\\s+([a-z]{2,5}\\d{2})\\s*(?:size\\s*)?([ml])\\s+(\\d+).*");
+        Matcher m2 = p2.matcher(input);
+        if (m2.matches()) {
+            handleAdd(chatId, "/add " + m2.group(2).toUpperCase() + " " + m2.group(3).toUpperCase() + " " + m2.group(4));
+            return true;
+        }
+
+        return false;
+    }
+
+    private void handleAdd(Long chatId, String text) {
+        String[] parts = text.split("\\s+");
+        if (parts.length != 4) {
+            send(chatId, "Sai cú pháp. Dùng: /add <productId> <M|L> <quantity>");
+            return;
+        }
+
+        String productId = parts[1].trim().toUpperCase();
+        String size = parts[2].trim().toUpperCase();
+        int quantity;
+
+        try {
+            quantity = Integer.parseInt(parts[3].trim());
+        } catch (NumberFormatException exception) {
+            send(chatId, "Quantity phải là số nguyên dương.");
+            return;
+        }
+
+        if (quantity <= 0) {
+            send(chatId, "Quantity phải >= 1.");
+            return;
+        }
+
+        if (quantity > MAX_QTY_PER_ITEM) {
+            send(chatId, "Mỗi món tối đa " + MAX_QTY_PER_ITEM + " ly/lần.");
+            return;
+        }
+
+        if (!"M".equals(size) && !"L".equals(size)) {
+            send(chatId, "Size chỉ nhận M hoặc L.");
+            return;
+        }
+
+        Product product = productService.getProductById(productId);
+        if (!product.isAvailable()) {
+            send(chatId, "Món này hiện đang hết hàng.");
+            return;
+        }
+
+        List<CartItem> cart = carts.computeIfAbsent(chatId, key -> new ArrayList<>());
+        CartItem existing = cart.stream()
+                .filter(item -> item.productId().equals(productId) && item.size().equals(size))
+                .findFirst()
+                .orElse(null);
+
+        if (existing != null) {
+            cart.remove(existing);
+            cart.add(new CartItem(existing.productId(), existing.productName(), size, existing.quantity() + quantity, existing.unitPrice()));
+        } else {
+            int unitPrice = "M".equals(size) ? product.getPriceM() : product.getPriceL();
+            cart.add(new CartItem(product.getId(), product.getName(), size, quantity, unitPrice));
+        }
+
+        touchCart(chatId);
+        send(chatId, "Đã thêm vào giỏ: " + product.getName() + " size " + size + " x" + quantity);
+    }
+
+    private void handleRemove(Long chatId, String text) {
+        String[] parts = text.split("\\s+");
+        if (parts.length != 3) {
+            send(chatId, "Sai cú pháp. Dùng: /remove <productId> <M|L>");
+            return;
+        }
+
+        String productId = parts[1].trim().toUpperCase();
+        String size = parts[2].trim().toUpperCase();
+
+        List<CartItem> cart = carts.getOrDefault(chatId, new ArrayList<>());
+        CartItem target = cart.stream()
+                .filter(item -> item.productId().equals(productId) && item.size().equals(size))
+                .findFirst()
+                .orElse(null);
+
+        if (target == null) {
+            send(chatId, "Không tìm thấy món trong giỏ.");
+            return;
+        }
+
+        cart.remove(target);
+        if (cart.isEmpty()) {
+            carts.remove(chatId);
+            cartTouchedAt.remove(chatId);
+        } else {
+            carts.put(chatId, cart);
+            touchCart(chatId);
+        }
+
+        send(chatId, "Đã xóa " + productId + " size " + size + " khỏi giỏ.");
+    }
+
     private void handleCheckout(Long chatId, String text) {
         List<CartItem> cart = carts.getOrDefault(chatId, List.of());
         if (cart.isEmpty()) {
@@ -216,16 +342,14 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         }
 
         try {
-            // Tách làm 4 phần: /checkout | tên | sđt | địa chỉ (nếu có)
-            String[] parts = text.split("\\s+", 4);
+            String[] parts = text.split("\\s+");
             if (parts.length < 3) {
-                send(chatId, "Sai cú pháp. Dùng: /checkout <tên> <sđt> [địa chỉ]");
+                send(chatId, "Sai cú pháp. Dùng: /checkout <ten_khach> <so_dien_thoai>");
                 return;
             }
 
             String customerName = parts[1].trim();
             String customerPhone = parts[2].trim();
-            String address = (parts.length == 4) ? parts[3].trim() : "Nhận tại cửa hàng";
 
             if (!customerPhone.matches("^[0-9+]{9,15}$")) {
                 send(chatId, "Số điện thoại không hợp lệ.");
@@ -243,7 +367,6 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
             CreateOrderRequest request = CreateOrderRequest.builder()
                     .customerName(customerName)
                     .customerPhone(customerPhone)
-                    .address(address)
                     .telegramChatId(chatId)
                     .items(items)
                     .build();
@@ -256,139 +379,107 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
 
             send(chatId, """
                 Tạo đơn thành công ✅
-                Mã đơn: #%d
-                Khách hàng: %s
-                Địa chỉ: %s
+                Mã đơn: %d
                 Tổng tiền: %,d VND
+                Trạng thái: %s
 
-                Bấm vào link bên dưới để thanh toán:
+                Quét QR bên dưới hoặc bấm link thanh toán:
                 %s
                 """.formatted(
                     response.getId(),
-                    customerName,
-                    address,
                     response.getTotalAmount(),
+                    response.getStatus(),
                     payment.getCheckoutUrl()
             ));
 
             if (payment.getQrCode() != null && !payment.getQrCode().isBlank()) {
                 sendQrImage(chatId, payment.getQrCode());
+            } else {
+                send(chatId, "Hiện chưa tạo được mã QR, vui lòng thanh toán bằng link ở trên.");
             }
         } finally {
             releaseCheckoutLock(chatId);
         }
     }
 
-    private void handleAdd(Long chatId, String text) {
+    private void handleCancel(Long chatId, String text) {
         String[] parts = text.split("\\s+");
-        if (parts.length != 4) {
-            send(chatId, "Sai cú pháp. Dùng: /add <mã> <size> <số lượng>");
+        if (parts.length != 2) {
+            send(chatId, "Sai cú pháp. Dùng: /cancel <orderId>");
             return;
         }
 
-        String productId = parts[1].trim().toUpperCase();
-        String size = parts[2].trim().toUpperCase();
-        int quantity;
+        Long orderId;
         try {
-            quantity = Integer.parseInt(parts[3].trim());
-        } catch (Exception e) {
-            send(chatId, "Số lượng phải là số.");
+            orderId = Long.parseLong(parts[1].trim());
+        } catch (NumberFormatException exception) {
+            send(chatId, "orderId phải là số.");
             return;
         }
 
-        if (quantity <= 0 || quantity > MAX_QTY_PER_ITEM) {
-            send(chatId, "Số lượng từ 1 đến " + MAX_QTY_PER_ITEM);
-            return;
-        }
-
-        Product product = productService.getProductById(productId);
-        if (!product.isAvailable()) {
-            send(chatId, "Món này hiện đang hết hàng.");
-            return;
-        }
-
-        List<CartItem> cart = carts.computeIfAbsent(chatId, k -> new ArrayList<>());
-        cart.removeIf(i -> i.productId().equals(productId) && i.size().equals(size));
-        int price = "M".equals(size) ? product.getPriceM() : product.getPriceL();
-        cart.add(new CartItem(product.getId(), product.getName(), size, quantity, price));
-
-        touchCart(chatId);
-        send(chatId, "Đã thêm " + product.getName() + " (" + size + ") x" + quantity);
+        OrderResponse response = orderService.cancelOrder(orderId);
+        send(chatId, "Đơn " + response.getId() + " đã chuyển sang CANCELLED.");
     }
 
-    // --- CÁC HÀM BỔ TRỢ ---
     private String buildMenuText() {
-        List<Product> products = productService.getAllProducts();
-        StringBuilder sb = new StringBuilder("🧋 THỰC ĐƠN CỦA QUÁN\n");
-        products.stream().filter(Product::isAvailable)
-                .sorted(Comparator.comparing(Product::getCategory))
-                .forEach(p -> sb.append(String.format("• %s - %s: %s (M:%d, L:%d)\n", p.getCategory(), p.getId(), p.getName(), p.getPriceM(), p.getPriceL())));
-        return sb.toString();
+        List<Product> products = productService.getAllProducts().stream()
+                .filter(Product::isAvailable)
+                .sorted(Comparator.comparing(Product::getCategory).thenComparing(Product::getId))
+                .toList();
+
+        StringBuilder builder = new StringBuilder("🧋 MENU\n");
+        String currentCategory = "";
+
+        for (Product product : products) {
+            if (!product.getCategory().equals(currentCategory)) {
+                currentCategory = product.getCategory();
+                builder.append("\n").append(currentCategory).append("\n");
+            }
+            builder.append("• ").append(product.getId()).append(" - ")
+                    .append(product.getName())
+                    .append(" (M: ").append(product.getPriceM())
+                    .append(", L: ").append(product.getPriceL()).append(")\n");
+        }
+
+        builder.append("\nDùng: /add TS01 M 2");
+        return builder.toString();
     }
 
     private String buildCartText(Long chatId) {
         List<CartItem> cart = carts.getOrDefault(chatId, List.of());
-        if (cart.isEmpty()) return "Giỏ hàng trống.";
-        StringBuilder sb = new StringBuilder("🛒 GIỎ HÀNG:\n");
+        if (cart.isEmpty()) {
+            return "Giỏ hàng đang trống.";
+        }
+
         int total = 0;
+        StringBuilder builder = new StringBuilder("GIỎ HÀNG:\n");
         for (CartItem item : cart) {
-            int sub = item.unitPrice() * item.quantity();
-            total += sub;
-            sb.append(String.format("- %s (%s) x%d: %,dđ\n", item.productName(), item.size(), item.quantity(), sub));
+            int lineTotal = item.unitPrice() * item.quantity();
+            total += lineTotal;
+            builder.append(item.productId())
+                    .append(" | ")
+                    .append(item.productName())
+                    .append(" | ")
+                    .append(item.size())
+                    .append(" | x")
+                    .append(item.quantity())
+                    .append(" | ")
+                    .append(lineTotal)
+                    .append(" VND\n");
         }
-        sb.append("Tổng: ").append(String.format("%,dđ", total));
-        return sb.toString();
-    }
-
-    private void handleRemove(Long chatId, String text) {
-        String[] parts = text.split("\\s+");
-        if (parts.length < 3) return;
-        List<CartItem> cart = carts.get(chatId);
-        if (cart != null) {
-            cart.removeIf(i -> i.productId().equalsIgnoreCase(parts[1]) && i.size().equalsIgnoreCase(parts[2]));
-            send(chatId, "Đã xóa món khỏi giỏ.");
-        }
-    }
-
-    private void handleCancel(Long chatId, String text) {
-        try {
-            Long orderId = Long.parseLong(text.split("\\s+")[1]);
-            orderService.cancelOrder(orderId);
-            send(chatId, "Đã hủy đơn #" + orderId);
-        } catch (Exception e) {
-            send(chatId, "Không tìm thấy mã đơn.");
-        }
+        builder.append("Tổng: ").append(total).append(" VND");
+        return builder.toString();
     }
 
     private void send(Long chatId, String message) {
         try {
-            execute(SendMessage.builder().chatId(chatId.toString()).text(message).build());
-        } catch (TelegramApiException e) {
-            log.error("Send failed", e);
-        }
-    }
-
-    private void sendQrImage(Long chatId, String qrRaw) {
-        try {
-            String url = "https://quickchart.io/qr?size=320&text=" + java.net.URLEncoder.encode(qrRaw, "UTF-8");
-            execute(org.telegram.telegrambots.meta.api.methods.send.SendPhoto.builder()
+            execute(SendMessage.builder()
                     .chatId(chatId.toString())
-                    .photo(new org.telegram.telegrambots.meta.api.objects.InputFile(url))
-                    .caption("Quét mã để thanh toán nhanh")
+                    .text(message)
                     .build());
-        } catch (Exception e) {
-            log.error("QR send failed", e);
+        } catch (TelegramApiException exception) {
+            log.error("Failed to send message", exception);
         }
-    }
-
-    private boolean tryHandleNaturalAdd(Long chatId, String text) {
-        Pattern p = Pattern.compile("(?i)(?:thêm|add)\\s+(\\d+)\\s+([a-z]{2,5}\\d{2})\\s+size\\s+([ml])");
-        Matcher m = p.matcher(text);
-        if (m.find()) {
-            handleAdd(chatId, "/add " + m.group(2) + " " + m.group(3) + " " + m.group(1));
-            return true;
-        }
-        return false;
     }
 
     private boolean allowRequest(Long chatId) {
@@ -397,18 +488,44 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         return last == null || (now - last) >= REQUEST_COOLDOWN_MS;
     }
 
-    private void touchCart(Long chatId) { cartTouchedAt.put(chatId, System.currentTimeMillis()); }
+    private void touchCart(Long chatId) {
+        cartTouchedAt.put(chatId, System.currentTimeMillis());
+    }
 
     private void clearExpiredCartIfNeeded(Long chatId) {
-        Long last = cartTouchedAt.get(chatId);
-        if (last != null && (System.currentTimeMillis() - last > CART_TIMEOUT_MS)) {
+        Long touched = cartTouchedAt.get(chatId);
+        if (touched == null) {
+            return;
+        }
+        if (System.currentTimeMillis() - touched > CART_TIMEOUT_MS) {
             carts.remove(chatId);
             cartTouchedAt.remove(chatId);
         }
     }
 
-    private boolean acquireCheckoutLock(Long chatId) { return checkoutLocks.putIfAbsent(chatId, true) == null; }
-    private void releaseCheckoutLock(Long chatId) { checkoutLocks.remove(chatId); }
+    private void sendQrImage(Long chatId, String qrRaw) {
+        try {
+            String qrImageUrl = "https://quickchart.io/qr?size=320&text="
+                    + java.net.URLEncoder.encode(qrRaw, java.nio.charset.StandardCharsets.UTF_8);
 
-    private record CartItem(String productId, String productName, String size, int quantity, int unitPrice) {}
+            execute(org.telegram.telegrambots.meta.api.methods.send.SendPhoto.builder()
+                    .chatId(chatId.toString())
+                    .photo(new org.telegram.telegrambots.meta.api.objects.InputFile(qrImageUrl))
+                    .caption("Quét mã QR để thanh toán")
+                    .build());
+        } catch (Exception exception) {
+            log.error("Failed to send QR image", exception);
+        }
+    }
+
+    private boolean acquireCheckoutLock(Long chatId) {
+        return checkoutLocks.putIfAbsent(chatId, true) == null;
+    }
+
+    private void releaseCheckoutLock(Long chatId) {
+        checkoutLocks.remove(chatId);
+    }
+
+    private record CartItem(String productId, String productName, String size, int quantity, int unitPrice) {
+    }
 }

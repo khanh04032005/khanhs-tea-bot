@@ -12,6 +12,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 @Service
@@ -52,9 +53,9 @@ public class RagService {
             String joinedContext = String.join("\n\n", contexts);
 
             String prompt = """
-                Bạn là trợ lý quán trà sữa TeaShop.
-                Trả lời bằng tiếng Việt, ngắn gọn, thân thiện dựa trên dữ liệu context.
-                Nếu không thấy thông tin trong context, hãy xin lỗi khách lịch sự.
+                Bạn là trợ lý quán trà sữa.
+                Trả lời bằng tiếng Việt, ngắn gọn, đúng theo dữ liệu context.
+                Nếu không đủ dữ liệu, nói rõ là chưa có thông tin.
 
                 Context:
                 %s
@@ -80,14 +81,37 @@ public class RagService {
             String answer = root.path("candidates").path(0).path("content").path("parts").path(0).path("text").asText("").trim();
 
             if (answer.isBlank()) {
-                // Thay vì trả về context thô, trả về câu thông báo
-                return "Xin lỗi, mình chưa tìm thấy thông tin bạn cần. Bạn vui lòng dùng /menu hoặc hỏi câu khác nhé!";
+                return "Thông tin mình tìm được:\n- " + String.join("\n- ", contexts);
             }
             return answer;
+        } catch (org.springframework.web.client.HttpClientErrorException.TooManyRequests exception) {
+            List<String> contexts = faqMode
+                    ? qdrantService.searchTextContextsBySource(question, limit, "faq")
+                    : qdrantService.searchTextContexts(question, limit);
+
+            if (contexts.isEmpty() && faqMode) {
+                contexts = qdrantService.searchTextContexts(question, limit);
+            }
+
+            if (contexts.isEmpty()) {
+                return "";
+            }
+            return "Thông tin mình tìm được:\n- " + String.join("\n- ", contexts);
         } catch (Exception exception) {
-            log.error("RAG logic failed", exception);
-            // Khi có lỗi (Too many requests hoặc lỗi API), trả về câu thông báo lịch sự
-            return "Hệ thống đang bận một chút, mình chưa thể trả lời ngay. Bạn xem tạm /menu hoặc thử lại sau nha!";
+            log.error("RAG answer failed", exception);
+
+            List<String> contexts = faqMode
+                    ? qdrantService.searchTextContextsBySource(question, limit, "faq")
+                    : qdrantService.searchTextContexts(question, limit);
+
+            if (contexts.isEmpty() && faqMode) {
+                contexts = qdrantService.searchTextContexts(question, limit);
+            }
+
+            if (contexts.isEmpty()) {
+                return "";
+            }
+            return "Thông tin mình tìm được:\n- " + String.join("\n- ", contexts);
         }
     }
 }
