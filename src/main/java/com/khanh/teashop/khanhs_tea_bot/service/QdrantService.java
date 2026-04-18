@@ -39,58 +39,25 @@ public class QdrantService {
         vectors.put("size", qdrantProperties.getVectorSize());
         vectors.put("distance", "Cosine");
 
+        // ✅ Indexed fields để filter được
+        Map<String, Object> indexedFields = new HashMap<>();
+        indexedFields.put("source", Map.of("type", "keyword"));
+        indexedFields.put("category", Map.of("type", "keyword"));
+
         Map<String, Object> body = new HashMap<>();
         body.put("vectors", vectors);
+        body.put("indexed_fields", List.of("source", "category"));
 
         try {
             restTemplate.exchange(url, HttpMethod.PUT, new HttpEntity<>(body, headers()), String.class);
             log.info("✅ Qdrant collection created: {}", qdrantProperties.getCollection());
-            createIndexes(); // Tạo index ngay khi tạo collection
         } catch (org.springframework.web.client.HttpClientErrorException.Conflict conflict) {
-            log.info("ℹ️ Qdrant collection already exists, checking indexes...");
-            createIndexes(); // Collection có rồi thì vẫn phải check/tạo index cho chắc
+            log.info("ℹ️ Qdrant collection already exists");
         } catch (Exception e) {
             log.error("❌ Qdrant ensureCollection failed", e);
         }
     }
 
-    private void createIndexes() {
-        String baseUrl = qdrantProperties.getUrl()
-                + "/collections/" + qdrantProperties.getCollection();
-
-        try {
-            // Tạo index cho source field
-            String sourceUrl = baseUrl + "/index/source";
-            Map<String, Object> sourcePayload = new HashMap<>();
-            sourcePayload.put("field_schema", Map.of("type", "keyword"));
-
-            restTemplate.exchange(
-                    sourceUrl,
-                    HttpMethod.PUT,
-                    new HttpEntity<>(sourcePayload, headers()),
-                    String.class
-            );
-            log.info("✅ Index 'source' created");
-
-            // Tạo index cho category field
-            String categoryUrl = baseUrl + "/index/category";
-            Map<String, Object> categoryPayload = new HashMap<>();
-            categoryPayload.put("field_schema", Map.of("type", "keyword"));
-
-            restTemplate.exchange(
-                    categoryUrl,
-                    HttpMethod.PUT,
-                    new HttpEntity<>(categoryPayload, headers()),
-                    String.class
-            );
-            log.info("✅ Index 'category' created");
-
-        } catch (HttpClientErrorException.Conflict conflict) {
-            log.info("ℹ️ Indexes already exist");
-        } catch (Exception e) {
-            log.warn("⚠️ Failed to create indexes: {}", e.getMessage());
-        }
-    }
     public void upsertDocuments(List<RagDocument> documents) {
         String url = qdrantProperties.getUrl()
                 + "/collections/" + qdrantProperties.getCollection()
