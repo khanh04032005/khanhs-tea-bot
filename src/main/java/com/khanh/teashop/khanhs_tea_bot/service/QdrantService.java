@@ -39,14 +39,14 @@ public class QdrantService {
         vectors.put("size", qdrantProperties.getVectorSize());
         vectors.put("distance", "Cosine");
 
-        // ✅ Indexed fields để filter được
-        Map<String, Object> indexedFields = new HashMap<>();
-        indexedFields.put("source", Map.of("type", "keyword"));
-        indexedFields.put("category", Map.of("type", "keyword"));
+        // ✅ Indexed fields via payload_schema
+        Map<String, Object> payloadSchema = new HashMap<>();
+        payloadSchema.put("source", Map.of("type", "keyword"));
+        payloadSchema.put("category", Map.of("type", "keyword"));
 
         Map<String, Object> body = new HashMap<>();
         body.put("vectors", vectors);
-        body.put("indexed_fields", List.of("source", "category"));
+        body.put("payload_schema", payloadSchema);
 
         try {
             restTemplate.exchange(url, HttpMethod.PUT, new HttpEntity<>(body, headers()), String.class);
