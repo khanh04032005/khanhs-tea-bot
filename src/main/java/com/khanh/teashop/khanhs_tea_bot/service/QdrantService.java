@@ -39,22 +39,36 @@ public class QdrantService {
         vectors.put("size", qdrantProperties.getVectorSize());
         vectors.put("distance", "Cosine");
 
-        Map<String, Object> indexedFields = new HashMap<>();
-        indexedFields.put("source", Map.of("type", "keyword"));
-        indexedFields.put("category", Map.of("type", "keyword"));
-
         Map<String, Object> body = new HashMap<>();
         body.put("vectors", vectors);
-        body.put("payload_schema", indexedFields);
 
         try {
             restTemplate.exchange(url, HttpMethod.PUT, new HttpEntity<>(body, headers()), String.class);
-            log.info("Qdrant collection created: {}", qdrantProperties.getCollection());
-        } catch (HttpClientErrorException.Conflict conflict) {
-            log.info("Qdrant collection already exists: {}", qdrantProperties.getCollection());
-        } catch (Exception exception) {
-            log.error("Qdrant ensureCollection failed", exception);
-            throw new IllegalStateException("Qdrant ensureCollection failed");
+            log.info("✅ Qdrant collection created: {}", qdrantProperties.getCollection());
+            createIndexes(); // Tạo index ngay khi tạo collection
+        } catch (org.springframework.web.client.HttpClientErrorException.Conflict conflict) {
+            log.info("ℹ️ Qdrant collection already exists, checking indexes...");
+            createIndexes(); // Collection có rồi thì vẫn phải check/tạo index cho chắc
+        } catch (Exception e) {
+            log.error("❌ Qdrant ensureCollection failed", e);
+        }
+    }
+
+    private void createIndexes() {
+        String url = qdrantProperties.getUrl()
+                + "/collections/" + qdrantProperties.getCollection()
+                + "/index";
+        try {
+            // field_schema phải là Map, không phải string
+            restTemplate.postForObject(url,
+                    new HttpEntity<>(Map.of("field_name", "source", "field_schema", Map.of("type", "keyword")), headers()),
+                    String.class);
+            restTemplate.postForObject(url,
+                    new HttpEntity<>(Map.of("field_name", "category", "field_schema", Map.of("type", "keyword")), headers()),
+                    String.class);
+            log.info("✅ Qdrant indexes created successfully!");
+        } catch (Exception e) {
+            log.warn("⚠️ Indexes might already exist, skipping: {}", e.getMessage());
         }
     }
 
