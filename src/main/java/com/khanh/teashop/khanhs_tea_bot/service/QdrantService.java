@@ -55,23 +55,42 @@ public class QdrantService {
     }
 
     private void createIndexes() {
-        String url = qdrantProperties.getUrl()
-                + "/collections/" + qdrantProperties.getCollection()
-                + "/index";
+        String baseUrl = qdrantProperties.getUrl()
+                + "/collections/" + qdrantProperties.getCollection();
+
         try {
-            // field_schema phải là Map, không phải string
-            restTemplate.postForObject(url,
-                    new HttpEntity<>(Map.of("field_name", "source", "field_schema", Map.of("type", "keyword")), headers()),
-                    String.class);
-            restTemplate.postForObject(url,
-                    new HttpEntity<>(Map.of("field_name", "category", "field_schema", Map.of("type", "keyword")), headers()),
-                    String.class);
-            log.info("✅ Qdrant indexes created successfully!");
+            // Tạo index cho source field
+            String sourceUrl = baseUrl + "/index/source";
+            Map<String, Object> sourcePayload = new HashMap<>();
+            sourcePayload.put("field_schema", Map.of("type", "keyword"));
+
+            restTemplate.exchange(
+                    sourceUrl,
+                    HttpMethod.PUT,
+                    new HttpEntity<>(sourcePayload, headers()),
+                    String.class
+            );
+            log.info("✅ Index 'source' created");
+
+            // Tạo index cho category field
+            String categoryUrl = baseUrl + "/index/category";
+            Map<String, Object> categoryPayload = new HashMap<>();
+            categoryPayload.put("field_schema", Map.of("type", "keyword"));
+
+            restTemplate.exchange(
+                    categoryUrl,
+                    HttpMethod.PUT,
+                    new HttpEntity<>(categoryPayload, headers()),
+                    String.class
+            );
+            log.info("✅ Index 'category' created");
+
+        } catch (HttpClientErrorException.Conflict conflict) {
+            log.info("ℹ️ Indexes already exist");
         } catch (Exception e) {
-            log.warn("⚠️ Indexes might already exist, skipping: {}", e.getMessage());
+            log.warn("⚠️ Failed to create indexes: {}", e.getMessage());
         }
     }
-
     public void upsertDocuments(List<RagDocument> documents) {
         String url = qdrantProperties.getUrl()
                 + "/collections/" + qdrantProperties.getCollection()
