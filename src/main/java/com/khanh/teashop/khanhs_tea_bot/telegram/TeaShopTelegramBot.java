@@ -84,20 +84,21 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         try {
             if ("/start".equalsIgnoreCase(text)) {
                 send(chatId, """
-            Xin chào, mình là TeaShop Assistant Bot 👋
-            Lệnh:
-            /menu
-            /add <productId> <M|L> <quantity>
-            /remove <productId> <M|L>
-            /cart
-            /checkout <ten_khach> <so_dien_thoai> [địa chỉ]
-            /cancel <orderId>
-            /clear
-
-            Sau /checkout bot sẽ gửi link thanh toán (và mã QR nếu có).
-            Chuyển khoản thành công, bot sẽ tự báo trạng thái đơn.
-            Nếu khách hàng không ghi địa chỉ mặc định sẽ nhận hàng tại quán.
-            """);
+        Xin chào! Mình là TeaShop Assistant Bot 🍵
+        Rất vui được phục vụ bạn!
+        
+        📌 CÁC LỆNH CHÍNH:
+        /menu : Xem danh sách món ăn & topping.
+        /add <mã> <size> <số_lượng> ... : Thêm một hoặc NHIỀU món cùng lúc.
+        👉 Ví dụ: /add TS01 M 1 TOP01 M 2 (Thêm 1 trà sữa và 2 topping).
+        
+        /cart : Xem giỏ hàng hiện tại.
+        /remove <mã> <size> : Xóa món khỏi giỏ.
+        /clear : Làm trống giỏ hàng.
+        /checkout <tên> <sđt> [địa chỉ] : Đặt hàng & Thanh toán.
+        /cancel <mã_đơn> : Hủy đơn hàng đã đặt.        
+        Sau khi /checkout, mình sẽ gửi Link và mã QR thanh toán. Khi bạn chuyển khoản thành công, mình sẽ tự động báo trạng thái đơn hàng ngay! 🚀
+        """);
                 return;
             }
 
@@ -236,59 +237,76 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
 
     private void handleAdd(Long chatId, String text) {
         String[] parts = text.split("\\s+");
-        if (parts.length != 4) {
-            send(chatId, "Sai cú pháp. Dùng: /add <productId> <M|L> <quantity>");
+
+        // Kiểm tra tối thiểu phải có 1 bộ (Lệnh + ID + Size + Qty = 4 phần tử)
+        // Và số lượng tham số sau lệnh /add phải chia hết cho 3
+        if (parts.length < 4 || (parts.length - 1) % 3 != 0) {
+            send(chatId, "⚠️ Sai cú pháp. Dùng: /add <mã> <size> <số_lượng> ...\n" +
+                    "Ví dụ: /add TS01 M 2 TOP01 M 1");
             return;
         }
 
-        String productId = parts[1].trim().toUpperCase();
-        String size = parts[2].trim().toUpperCase();
-        int quantity;
+        StringBuilder successReport = new StringBuilder("✅ Đã thêm vào giỏ hàng:\n");
+        boolean hasError = false;
 
-        try {
-            quantity = Integer.parseInt(parts[3].trim());
-        } catch (NumberFormatException exception) {
-            send(chatId, "Quantity phải là số nguyên dương.");
-            return;
-        }
+        // Duyệt qua từng bộ 3 tham số
+        for (int i = 1; i < parts.length; i += 3) {
+            String productId = parts[i].trim().toUpperCase();
+            String size = parts[i+1].trim().toUpperCase();
+            int quantity;
 
-        if (quantity <= 0) {
-            send(chatId, "Quantity phải >= 1.");
-            return;
-        }
+            try {
+                quantity = Integer.parseInt(parts[i+2].trim());
+                if (quantity <= 0 || quantity > MAX_QTY_PER_ITEM) {
+                    successReport.append("❌ ").append(productId).append(": Số lượng không hợp lệ (1-").append(MAX_QTY_PER_ITEM).append(")\n");
+                    hasError = true;
+                    continue;
+                }
+            } catch (NumberFormatException exception) {
+                successReport.append("❌ ").append(productId).append(": Số lượng phải là số.\n");
+                hasError = true;
+                continue;
+            }
 
-        if (quantity > MAX_QTY_PER_ITEM) {
-            send(chatId, "Mỗi món tối đa " + MAX_QTY_PER_ITEM + " ly/lần.");
-            return;
-        }
+            if (!"M".equals(size) && !"L".equals(size)) {
+                successReport.append("❌ ").append(productId).append(": Size phải là M hoặc L.\n");
+                hasError = true;
+                continue;
+            }
 
-        if (!"M".equals(size) && !"L".equals(size)) {
-            send(chatId, "Size chỉ nhận M hoặc L.");
-            return;
-        }
+            try {
+                Product product = productService.getProductById(productId);
+                if (!product.isAvailable()) {
+                    successReport.append("❌ ").append(productId).append(": Hiện đang hết hàng.\n");
+                    hasError = true;
+                    continue;
+                }
 
-        Product product = productService.getProductById(productId);
-        if (!product.isAvailable()) {
-            send(chatId, "Món này hiện đang hết hàng.");
-            return;
-        }
+                // Logic thêm vào giỏ hàng (giữ nguyên logic cũ của bạn)
+                List<CartItem> cart = carts.computeIfAbsent(chatId, key -> new ArrayList<>());
+                CartItem existing = cart.stream()
+                        .filter(item -> item.productId().equals(productId) && item.size().equals(size))
+                        .findFirst()
+                        .orElse(null);
 
-        List<CartItem> cart = carts.computeIfAbsent(chatId, key -> new ArrayList<>());
-        CartItem existing = cart.stream()
-                .filter(item -> item.productId().equals(productId) && item.size().equals(size))
-                .findFirst()
-                .orElse(null);
+                if (existing != null) {
+                    cart.remove(existing);
+                    cart.add(new CartItem(existing.productId(), existing.productName(), size, existing.quantity() + quantity, existing.unitPrice()));
+                } else {
+                    int unitPrice = "M".equals(size) ? product.getPriceM() : product.getPriceL();
+                    cart.add(new CartItem(product.getId(), product.getName(), size, quantity, unitPrice));
+                }
 
-        if (existing != null) {
-            cart.remove(existing);
-            cart.add(new CartItem(existing.productId(), existing.productName(), size, existing.quantity() + quantity, existing.unitPrice()));
-        } else {
-            int unitPrice = "M".equals(size) ? product.getPriceM() : product.getPriceL();
-            cart.add(new CartItem(product.getId(), product.getName(), size, quantity, unitPrice));
+                successReport.append("✨ ").append(product.getName()).append(" (").append(size).append(") x").append(quantity).append("\n");
+
+            } catch (Exception e) {
+                successReport.append("❌ ").append(productId).append(": Không tìm thấy mã này.\n");
+                hasError = true;
+            }
         }
 
         touchCart(chatId);
-        send(chatId, "Đã thêm vào giỏ: " + product.getName() + " size " + size + " x" + quantity);
+        send(chatId, successReport.toString().trim());
     }
 
     private void handleRemove(Long chatId, String text) {
