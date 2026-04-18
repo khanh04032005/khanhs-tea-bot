@@ -31,17 +31,23 @@ public class RagService {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public String answerMenuQuestion(String question) {
-        int limit = question.toUpperCase().matches(".*\\b[A-Z]{2,5}\\d{2}\\b.*") ? 1 : 5;
-        boolean faqMode = isFaqQuestion(question);
+        String q = question.toLowerCase();
+
+        // Phân loại câu hỏi để limit context đúng
+        boolean isMenuQuery = q.contains("menu") || q.contains("order") || q.contains("gì") || q.contains("có gì");
+        boolean isFaqQuery = isFaqQuestion(question);
+        boolean isProductCode = question.toUpperCase().matches(".*\\b[A-Z]{2,5}\\d{2}\\b.*");
+
+        int limit = isProductCode ? 1 : (isMenuQuery ? 3 : 5);
 
         try {
-            List<String> contexts = searchContexts(question, limit, faqMode);
+            List<String> contexts = searchContexts(question, limit, isFaqQuery, isMenuQuery);
 
             if (contexts.isEmpty()) {
                 return "";
             }
 
-            String answer = callGeminiApi(question, contexts);
+            String answer = callGeminiApi(question, contexts, isMenuQuery);
 
             if (answer.isBlank()) {
                 return formatFallbackResponse(contexts);
@@ -50,10 +56,10 @@ public class RagService {
             return answer;
         } catch (org.springframework.web.client.HttpClientErrorException.TooManyRequests exception) {
             log.warn("Gemini rate limited, using fallback");
-            return handleFallback(question, limit, faqMode);
+            return handleFallback(question, limit, isFaqQuery, isMenuQuery);
         } catch (Exception exception) {
             log.error("RAG answer failed", exception);
-            return handleFallback(question, limit, faqMode);
+            return handleFallback(question, limit, isFaqQuery, isMenuQuery);
         }
     }
 
@@ -62,32 +68,40 @@ public class RagService {
         return q.contains("mở cửa") || q.contains("giờ") || q.contains("ship") || q.contains("phí");
     }
 
-    private List<String> searchContexts(String question, int limit, boolean faqMode) {
-        List<String> contexts = faqMode
-                ? qdrantService.searchTextContextsBySource(question, limit, "faq")
-                : qdrantService.searchTextContexts(question, limit);
-
-        if (contexts.isEmpty() && faqMode) {
-            contexts = qdrantService.searchTextContexts(question, limit);
+    private List<String> searchContexts(String question, int limit, boolean isFaqQuery, boolean isMenuQuery) {
+        // FAQ question - search trong FAQ source
+        if (isFaqQuery) {
+            List<String> contexts = qdrantService.searchTextContextsBySource(question, limit, "faq");
+            if (!contexts.isEmpty()) return contexts;
         }
 
-        return contexts;
+        // Menu query - search chỉ trong menu items
+        if (isMenuQuery) {
+            List<String> contexts = qdrantService.searchTextContextsBySource(question, limit, "menu");
+            if (!contexts.isEmpty()) return contexts;
+        }
+
+        // Default search
+        return qdrantService.searchTextContexts(question, limit);
     }
 
-    private String callGeminiApi(String question, List<String> contexts) throws Exception {
+    private String callGeminiApi(String question, List<String> contexts, boolean isMenuQuery) throws Exception {
         String joinedContext = String.join("\n\n", contexts);
 
+        // Sửa lại System Prompt cho có "gu" phục vụ
+        String systemPrompt = isMenuQuery
+                ? "Bạn là nhân viên tiệm trà sữa Khánh. Hãy liệt kê tên món và giá tiền một cách thân thiện, đẹp mắt. Tuyệt đối không đưa mã sản phẩm (như TS01, DX01) hay trạng thái true/false vào câu trả lời."
+                : "Bạn là trợ lý quán trà sữa Khánh. Trả lời bằng tiếng Việt, ngắn gọn, tự nhiên như người thật dựa trên dữ liệu. Nếu không có thông tin, hãy báo là quán chưa có món này ạ.";
+
         String prompt = """
-            Bạn là trợ lý quán trà sữa.
-            Trả lời bằng tiếng Việt, ngắn gọn, đúng theo dữ liệu context.
-            Nếu không đủ dữ liệu, nói rõ là chưa có thông tin.
-
-            Context:
             %s
 
-            Câu hỏi khách:
+            Dữ liệu quán (Context):
             %s
-            """.formatted(joinedContext, question);
+
+            Câu hỏi của khách:
+            %s
+            """.formatted(systemPrompt, joinedContext, question);
 
         String url = "https://generativelanguage.googleapis.com/v1beta/models/"
                 + model
@@ -108,23 +122,35 @@ public class RagService {
 
     private String formatFallbackResponse(List<String> contexts) {
         if (contexts.isEmpty()) {
-            return "";
+            return "Dạ hiện tại mình chưa tìm thấy thông tin này, bạn đợi xíu để mình kiểm tra lại nhé!";
         }
 
-        StringBuilder sb = new StringBuilder("Thông tin mình tìm được:\n");
-        for (int i = 0; i < contexts.size() && i < 5; i++) {
+        StringBuilder sb = new StringBuilder("Dạ, đây là một số thông tin mình tìm được:\n\n");
+        for (int i = 0; i < contexts.size() && i < 3; i++) {
             String context = contexts.get(i);
-            String cleaned = context.replaceAll("\\s+", " ").trim();
-            if (cleaned.length() > 150) {
-                cleaned = cleaned.substring(0, 150) + "...";
+
+            // Xóa sạch các field database không cần
+            String cleaned = context.replaceAll("(?i)Mã:\\s*[A-Z0-9]+,?\\s*", "")  // Xóa Mã: TS01,
+                    .replaceAll("(?i)Danh mục:\\s*[^,]+,?\\s*", "")  // Xóa Danh mục
+                    .replaceAll("(?i)Còn bán:\\s*(true|false),?\\s*", "")  // Xóa Còn bán
+                    .replaceAll("(?i)available:\\s*(true|false),?\\s*", "")  // Xóa available
+                    .replaceAll("Tên:\\s*", "")  // Xóa "Tên:"
+                    .replaceAll("Giá M:\\s*", "M: ")  // Format giá
+                    .replaceAll("Giá L:\\s*", "L: ")
+                    .replaceAll("\\s+", " ")
+                    .replaceAll(",\\s*,", ",")  // Fix dấu phẩy kép
+                    .trim();
+
+            if (!cleaned.isEmpty() && !cleaned.matches("^[,:\\s]+$")) {
+                sb.append("✨ ").append(cleaned).append("\n");
             }
-            sb.append("• ").append(cleaned).append("\n");
         }
+        sb.append("\nBạn cần đặt món nào thì nhắn mình nhé! 🍵");
         return sb.toString();
     }
 
-    private String handleFallback(String question, int limit, boolean faqMode) {
-        List<String> contexts = searchContexts(question, limit, faqMode);
+    private String handleFallback(String question, int limit, boolean isFaqQuery, boolean isMenuQuery) {
+        List<String> contexts = searchContexts(question, limit, isFaqQuery, isMenuQuery);
         return formatFallbackResponse(contexts);
     }
 }
