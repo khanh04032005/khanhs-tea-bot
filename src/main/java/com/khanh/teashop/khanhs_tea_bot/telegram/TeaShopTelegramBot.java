@@ -92,6 +92,7 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
         /menu : Xem danh sách món ăn & topping.
         /add <mã> <size> <số_lượng> ... : Thêm một hoặc NHIỀU món cùng lúc.
         👉 Ví dụ: /add TS01 M 2 thêm TOP01 M 1 (Thêm 2 trà sữa và 1 topping).
+        Mỗi món mới cách nhau bằng dấu phẩy.
         
         /cart : Xem giỏ hiện tại.
         /remove <mã> <size> : Xóa món khỏi giỏ.
