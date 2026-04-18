@@ -38,7 +38,7 @@ public class RagService {
         boolean isFaqQuery = isFaqQuestion(question);
         boolean isProductCode = question.toUpperCase().matches(".*\\b[A-Z]{2,5}\\d{2}\\b.*");
 
-        int limit = isProductCode ? 1 : (isMenuQuery ? 3 : 5);
+        int limit = isProductCode ? 1 : (isMenuQuery ? 30 : 10);
 
         try {
             List<String> contexts = searchContexts(question, limit, isFaqQuery, isMenuQuery);
@@ -126,7 +126,7 @@ public class RagService {
         }
 
         StringBuilder sb = new StringBuilder("Dạ, đây là một số thông tin mình tìm được:\n\n");
-        for (int i = 0; i < contexts.size() && i < 3; i++) {
+        for (int i = 0; i < contexts.size() && i < 30; i++) {
             String context = contexts.get(i);
 
             // Xóa sạch các field database không cần
