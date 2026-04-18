@@ -33,31 +33,35 @@ public class QdrantService {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public void ensureCollection() {
-        String url = qdrantProperties.getUrl() + "/collections/" + qdrantProperties.getCollection();
+        String collectionUrl = qdrantProperties.getUrl() + "/collections/" + qdrantProperties.getCollection();
 
+        // 1. Tạo Collection
         Map<String, Object> vectors = new HashMap<>();
         vectors.put("size", qdrantProperties.getVectorSize());
         vectors.put("distance", "Cosine");
 
-        // ✅ Indexed fields via payload_schema
-        Map<String, Object> payloadSchema = new HashMap<>();
-        payloadSchema.put("source", Map.of("type", "keyword"));
-        payloadSchema.put("category", Map.of("type", "keyword"));
-
-        Map<String, Object> body = new HashMap<>();
-        body.put("vectors", vectors);
-        body.put("payload_schema", payloadSchema);
+        Map<String, Object> createBody = new HashMap<>();
+        createBody.put("vectors", vectors);
 
         try {
-            restTemplate.exchange(url, HttpMethod.PUT, new HttpEntity<>(body, headers()), String.class);
-            log.info("✅ Qdrant collection created: {}", qdrantProperties.getCollection());
+            restTemplate.exchange(collectionUrl, HttpMethod.PUT, new HttpEntity<>(createBody, headers()), String.class);
+            log.info("✅ Qdrant collection created");
+
+            // 2. TẠO INDEX CHO FIELD 'source' (BẮT BUỘC ĐỂ FILTER KHÔNG LỖI)
+            String indexUrl = collectionUrl + "/index";
+            Map<String, Object> indexBody = new HashMap<>();
+            indexBody.put("field_name", "source");
+            indexBody.put("field_schema", "keyword");
+
+            restTemplate.exchange(indexUrl, HttpMethod.PUT, new HttpEntity<>(indexBody, headers()), String.class);
+            log.info("✅ Created Payload Index for 'source'");
+
         } catch (org.springframework.web.client.HttpClientErrorException.Conflict conflict) {
             log.info("ℹ️ Qdrant collection already exists");
         } catch (Exception e) {
-            log.error("❌ Qdrant ensureCollection failed", e);
+            log.error("❌ Qdrant setup failed", e);
         }
     }
-
     public void upsertDocuments(List<RagDocument> documents) {
         String url = qdrantProperties.getUrl()
                 + "/collections/" + qdrantProperties.getCollection()
