@@ -38,6 +38,7 @@ public class PayOsService {
     private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
     private final TelegramNotifyService telegramNotifyService;
+    private final OrderFulfillmentNotifyService orderFulfillmentNotifyService;
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -168,6 +169,8 @@ public class PayOsService {
 
             paymentRepository.save(payment);
             orderRepository.save(paidOrder);
+
+            orderFulfillmentNotifyService.notifyFulfillment(paidOrder, payment);
 
             telegramNotifyService.send(
                     paidOrder.getTelegramChatId(),
