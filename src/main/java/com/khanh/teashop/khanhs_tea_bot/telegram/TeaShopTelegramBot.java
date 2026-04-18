@@ -198,6 +198,13 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
                 return;
             }
 
+            // Freelance LLM answer cho câu hỏi ngoài chủ đề
+            String llmReply = geminiIntentService.answerFreelance(text);
+            if (llmReply != null && !llmReply.isBlank()) {
+                send(chatId, llmReply);
+                return;
+            }
+
             send(chatId, "Mình chưa hiểu. Dùng /start để xem lệnh.");
         } catch (ResponseStatusException exception) {
             send(chatId, "Lỗi: " + exception.getReason());

@@ -94,4 +94,36 @@ public class GeminiIntentService {
             return unknown;
         }
     }
+
+    public String answerFreelance(String userText) {
+        try {
+            String prompt = """
+            Bạn là nhân viên quán trà sữa Khánh.
+            Nếu khách hỏi ngoài chủ đề (không liên quan trà sữa), hãy:
+            1. Trả lời thân thiện, tự nhiên
+            2. Nhẹ nhàng gợi ý về menu trà sữa
+
+            Ví dụ: Khách hỏi "tôi muốn ăn cơm"
+            → Bot: "Dạ, cơm thì chúng tôi chưa có ạ. Nhưng bạn thử trà sữa Khánh xem, rất ngon và tươi mát luôn! 🍵"
+
+            Câu hỏi: %s
+            """.formatted(userText);
+
+            Map<String, Object> body = new HashMap<>();
+            body.put("contents", List.of(Map.of(
+                    "parts", List.of(Map.of("text", prompt))
+            )));
+
+            String url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+
+            String response = restTemplate.postForObject(url, new HttpEntity<>(body, headers), String.class);
+            JsonNode root = objectMapper.readTree(response);
+            return root.path("candidates").path(0).path("content").path("parts").path(0).path("text").asText("").trim();
+        } catch (Exception e) {
+            log.warn("Freelance answer failed", e);
+            return null;
+        }
+    }
 }
