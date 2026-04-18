@@ -19,6 +19,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
@@ -237,52 +238,110 @@ public class TeaShopTelegramBot extends TelegramLongPollingBot {
     }
 
     private void handleAdd(Long chatId, String text) {
-        // Chuẩn hóa chuỗi: thay dấu phẩy bằng khoảng trắng, chuyển thành chữ hoa
-        String cleanText = text.replace(",", " ").toUpperCase();
+        // Chuẩn hóa chuỗi để parse theo token, giữ dấu phẩy làm ranh giới món chính
+        String cleanText = text.replace(",", " , ").toUpperCase();
         String[] parts = cleanText.split("\\s+");
 
         StringBuilder successReport = new StringBuilder("✅ Đã thêm vào giỏ hàng:\n");
 
-        // i bắt đầu từ 1 để bỏ qua chữ "/add"
         int i = 1;
         while (i < parts.length) {
-            // 1. Xử lý món chính
+            if (parts[i].isBlank() || ",".equals(parts[i])) {
+                i++;
+                continue;
+            }
+
+            if ("THÊM".equals(parts[i])) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Sai cú pháp: sau dấu phẩy phải là món chính, không được bắt đầu bằng 'thêm'.");
+            }
+
+            ensureTokenCount(parts, i, 3, "Sai cú pháp món chính. Dùng: /add <mã_nước> <M|L> <số_lượng>");
+
             String productId = parts[i];
-            String size = (i + 1 < parts.length) ? parts[i + 1] : "M";
-            int quantity = (i + 2 < parts.length) ? Integer.parseInt(parts[i + 2]) : 1;
+            String size = normalizeSize(parts[i + 1]);
+            int quantity = parseQuantity(parts[i + 2], "Số lượng món chính không hợp lệ.");
 
             Product product = productService.getProductById(productId);
-            addToCartLogic(chatId, product, size, quantity); // Hàm phụ gọi logic lưu vào Map carts
+            if (isTopping(product)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Món chính không được là topping. Sau 'thêm' mới nhập mã topping (ví dụ TOP01).");
+            }
+
+            addToCartLogic(chatId, product, size, quantity);
 
             successReport.append("✨ ").append(product.getName())
                     .append(" (").append(size).append(") x").append(quantity);
 
-            i += 3; // Nhảy qua bộ 3 (ID, Size, Qty)
+            i += 3;
 
-            // 2. Kiểm tra nếu có từ khóa "THÊM" để xử lý Topping đi kèm
-            if (i < parts.length && "THÊM".equals(parts[i])) {
-                i++; // Bỏ qua chữ "THÊM"
+            // Hỗ trợ nhiều topping liên tiếp cho cùng món: thêm TOP01 M 1 thêm TOP03 L 1
+            while (i < parts.length && "THÊM".equals(parts[i])) {
+                ensureTokenCount(parts, i + 1, 3,
+                        "Sai cú pháp topping. Dùng: thêm <mã_topping> <M|L> <số_lượng>");
 
-                if (i + 2 < parts.length) {
-                    String topId = parts[i];
-                    String topSize = parts[i + 1];
-                    int topQty = Integer.parseInt(parts[i + 2]);
+                String topId = parts[i + 1];
+                String topSize = normalizeSize(parts[i + 2]);
+                int topQty = parseQuantity(parts[i + 3], "Số lượng topping không hợp lệ.");
 
-                    Product topping = productService.getProductById(topId);
-                    addToCartLogic(chatId, topping, topSize, topQty);
-
-                    successReport.append(" thêm ").append(topping.getName())
-                            .append(" ").append(topSize).append(" x").append(topQty);
-                    i += 3;
+                Product topping = productService.getProductById(topId);
+                if (!isTopping(topping)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Sau 'thêm' chỉ được nhập mã topping (ví dụ TOP01), không được nhập mã nước.");
                 }
-            }
-            successReport.append("\n");
 
-            // Nếu sau đó là dấu cách hoặc ký tự khác không phải "THÊM", vòng lặp tiếp tục món mới
+                addToCartLogic(chatId, topping, topSize, topQty);
+
+                successReport.append(" thêm ").append(topping.getName())
+                        .append(" ").append(topSize).append(" x").append(topQty);
+
+                i += 4;
+            }
+
+            successReport.append("\n");
         }
 
         touchCart(chatId);
         send(chatId, successReport.toString().trim());
+    }
+
+    private void ensureTokenCount(String[] parts, int startIndex, int required, String message) {
+        if (startIndex + required - 1 >= parts.length) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+        }
+    }
+
+    private String normalizeSize(String rawSize) {
+        String size = rawSize == null ? "" : rawSize.trim().toUpperCase();
+        if (!"M".equals(size) && !"L".equals(size)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Size phải là M hoặc L.");
+        }
+        return size;
+    }
+
+    private int parseQuantity(String rawQuantity, String message) {
+        try {
+            int quantity = Integer.parseInt(rawQuantity);
+            if (quantity <= 0 || quantity > MAX_QTY_PER_ITEM) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Số lượng phải từ 1 đến " + MAX_QTY_PER_ITEM + "."
+                );
+            }
+            return quantity;
+        } catch (NumberFormatException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+        }
+    }
+
+    private boolean isTopping(Product product) {
+        if (product == null) {
+            return false;
+        }
+
+        String id = product.getId() == null ? "" : product.getId().toUpperCase();
+        String category = product.getCategory() == null ? "" : product.getCategory().toUpperCase();
+        return id.startsWith("TOP") || category.contains("TOP");
     }
 
     private void addToCartLogic(Long chatId, Product product, String size, int quantity) {
